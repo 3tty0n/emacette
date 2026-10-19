@@ -1,7 +1,7 @@
-# my-emacs
+# nano-emacs
 
 A lightweight Emacs-flavoured terminal editor for git commit messages, file
-viewing, and small edits.
+viewing, and small edits. The binary is `nemacs`.
 
 - Single Rust binary. Direct dependencies: `crossterm`, `unicode-width`.
 - Emacs key bindings, minibuffer, mark, kill ring, undo.
@@ -19,7 +19,7 @@ Median time from process start to first terminal output, 44-line Rust file,
 
 | Editor | First paint |
 |---|---:|
-| my-emacs | 2.7 ms |
+| nemacs | 2.7 ms |
 | nano | 3.9 ms |
 | vim | 5.3 ms |
 | emacs -nw -Q | 80.4 ms |
@@ -34,7 +34,7 @@ Rust 1.74 or newer.
 
 ```sh
 cargo build --release
-install -Dm755 target/release/my-emacs ~/.local/bin/my-emacs
+install -Dm755 target/release/nemacs ~/.local/bin/nemacs
 ```
 
 Alternatives:
@@ -47,24 +47,24 @@ make install                 # PREFIX=/usr/local to override
 `~/.local/bin` must be on `PATH`. To run without installing:
 
 ```sh
-./target/release/my-emacs README.md
+./target/release/nemacs README.md
 ```
 
 ## Usage
 
 ```sh
-my-emacs                # scratch buffer
-my-emacs FILE           # open a file, or create it
-my-emacs +42 FILE       # start at line 42
-my-emacs --help         # print key bindings
+nemacs                  # scratch buffer
+nemacs FILE             # open a file, or create it
+nemacs +42 FILE         # start at line 42
+nemacs --help           # print key bindings
 ```
 
 ## Git
 
 ```sh
-git config --global core.editor my-emacs
-git config --global core.editor "$HOME/.local/bin/my-emacs"   # not on PATH
-GIT_EDITOR=my-emacs git commit                                 # one-off
+git config --global core.editor nemacs
+git config --global core.editor "$HOME/.local/bin/nemacs"     # not on PATH
+GIT_EDITOR=nemacs git commit                                   # one-off
 ```
 
 Commit workflow:
@@ -130,9 +130,9 @@ contains an uppercase character.
 
 Read from the first existing path:
 
-1. `$MY_EMACS_CONFIG`
-2. `$XDG_CONFIG_HOME/my-emacs/config`
-3. `~/.config/my-emacs/config`
+1. `$NANO_EMACS_CONFIG`
+2. `$XDG_CONFIG_HOME/nano-emacs/config`
+3. `~/.config/nano-emacs/config`
 
 Format: `key = value`, one per line; `#` starts a comment; unknown keys are
 ignored.

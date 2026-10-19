@@ -11,17 +11,17 @@ use crossterm::event::{
 use crossterm::execute;
 use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 
-use my_emacs::config::Config;
-use my_emacs::editor::Editor;
-use my_emacs::help;
-use my_emacs::key::{Key, KeyCode};
-use my_emacs::render;
+use nano_emacs::config::Config;
+use nano_emacs::editor::Editor;
+use nano_emacs::help;
+use nano_emacs::key::{Key, KeyCode};
+use nano_emacs::render;
 
 fn main() -> ExitCode {
     match run() {
         Ok(code) => ExitCode::from(code.clamp(0, 255) as u8),
         Err(message) => {
-            eprintln!("my-emacs: {message}");
+            eprintln!("nemacs: {message}");
             ExitCode::FAILURE
         }
     }
@@ -40,7 +40,7 @@ fn run() -> Result<i32, String> {
                     return Ok(0);
                 }
                 "-V" | "--version" => {
-                    println!("my-emacs {}", env!("CARGO_PKG_VERSION"));
+                    println!("nemacs {}", env!("CARGO_PKG_VERSION"));
                     return Ok(0);
                 }
                 "--" => {
@@ -145,12 +145,12 @@ fn handle_event(editor: &mut Editor, event: Event) {
 
 fn print_help() {
     println!(
-        "my-emacs {} - a tiny Emacs-flavoured terminal editor with syntax highlighting",
+        "nemacs {} - a tiny Emacs-flavoured terminal editor with syntax highlighting",
         env!("CARGO_PKG_VERSION")
     );
     println!();
-    println!("Usage: my-emacs [OPTIONS] [FILE]");
-    println!("       my-emacs +LINE [FILE]");
+    println!("Usage: nemacs [OPTIONS] [FILE]");
+    println!("       nemacs +LINE [FILE]");
     println!();
     println!("Options:");
     println!("  -h, --help       show this help and the key bindings");
@@ -158,7 +158,7 @@ fn print_help() {
     println!();
     print!("{}", help::plain_text());
     println!();
-    println!("Configuration file: ~/.config/my-emacs/config");
+    println!("Configuration file: ~/.config/nano-emacs/config");
 }
 
 struct TerminalGuard;

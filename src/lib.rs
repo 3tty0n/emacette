@@ -1,4 +1,4 @@
-//! my-emacs: a tiny Emacs-flavoured terminal editor.
+//! nano-emacs: a tiny Emacs-flavoured terminal editor.
 
 pub mod buffer;
 pub mod config;

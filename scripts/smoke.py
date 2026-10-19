@@ -17,7 +17,7 @@ sys.path.insert(0, HERE)
 from ptyharness import run  # noqa: E402
 from screen import screen_from_ansi  # noqa: E402
 
-BIN = os.path.abspath(sys.argv[1] if len(sys.argv) > 1 else os.path.join(ROOT, "target", "release", "my-emacs"))
+BIN = os.path.abspath(sys.argv[1] if len(sys.argv) > 1 else os.path.join(ROOT, "target", "release", "nemacs"))
 COLS, ROWS = 80, 20
 
 failures = []
@@ -32,7 +32,7 @@ def check(name, condition, detail=""):
 
 
 def tmpfile(text, name="note.txt"):
-    directory = tempfile.mkdtemp(prefix="my-emacs-smoke-")
+    directory = tempfile.mkdtemp(prefix="nano-emacs-smoke-")
     path = os.path.join(directory, name)
     with open(path, "w", encoding="utf-8") as handle:
         handle.write(text)
@@ -50,7 +50,7 @@ def test_basic_edit_and_save():
         [b"hello\n", b"\x18\x13", b"\x18\x03"],
         cols=COLS,
         rows=ROWS,
-        expect=b"my-emacs",
+        expect=b"nemacs",
     )
     with open(path, encoding="utf-8") as handle:
         content = handle.read()
@@ -67,7 +67,7 @@ def test_japanese_input():
         [text.encode("utf-8"), b"\x18\x13", b"\x18\x03"],
         cols=COLS,
         rows=ROWS,
-        expect=b"my-emacs",
+        expect=b"nemacs",
     )
     with open(path, encoding="utf-8") as handle:
         content = handle.read()
@@ -82,7 +82,7 @@ def test_undo_key():
         [b"abc", b"\x1f", b"\x18\x13", b"\x18\x03"],
         cols=COLS,
         rows=ROWS,
-        expect=b"my-emacs",
+        expect=b"nemacs",
     )
     with open(path, encoding="utf-8") as handle:
         content = handle.read()
@@ -96,7 +96,7 @@ def test_mark_and_kill_region():
         [b"\x00", b"\x06" * 5, b"\x17", b"\x18\x13", b"\x18\x03"],
         cols=COLS,
         rows=ROWS,
-        expect=b"my-emacs",
+        expect=b"nemacs",
     )
     with open(path, encoding="utf-8") as handle:
         content = handle.read()
@@ -110,7 +110,7 @@ def test_escape_meta_word_motion():
         [b"foo bar", b"\x01", b"\x1bf", b"X", b"\x18\x13", b"\x18\x03"],
         cols=COLS,
         rows=ROWS,
-        expect=b"my-emacs",
+        expect=b"nemacs",
     )
     with open(path, encoding="utf-8") as handle:
         content = handle.read()
@@ -124,7 +124,7 @@ def test_search_and_insert():
         [b"\x13", b"gamma", b"\r", b"!", b"\x18\x13", b"\x18\x03"],
         cols=COLS,
         rows=ROWS,
-        expect=b"my-emacs",
+        expect=b"nemacs",
     )
     with open(path, encoding="utf-8") as handle:
         content = handle.read()
@@ -140,7 +140,7 @@ def test_help_overlay():
         [b"\x1bOP", b"q", b"\x18\x03"],
         cols=COLS,
         rows=ROWS,
-        expect=b"my-emacs",
+        expect=b"nemacs",
     )
     check(
         "help opens with F1",
@@ -150,7 +150,7 @@ def test_help_overlay():
 
 
 def test_git_commit():
-    repo = tempfile.mkdtemp(prefix="my-emacs-git-")
+    repo = tempfile.mkdtemp(prefix="nano-emacs-git-")
     try:
         subprocess.run(["git", "-C", repo, "init", "-q"], check=True)
         subprocess.run(["git", "-C", repo, "config", "user.name", "Test"], check=True)
@@ -182,7 +182,7 @@ def test_git_commit():
 
 
 def test_git_empty_message_warning():
-    repo = tempfile.mkdtemp(prefix="my-emacs-git-")
+    repo = tempfile.mkdtemp(prefix="nano-emacs-git-")
     try:
         subprocess.run(["git", "-C", repo, "init", "-q"], check=True)
         subprocess.run(["git", "-C", repo, "config", "user.name", "Test"], check=True)
@@ -213,7 +213,7 @@ def test_git_empty_message_warning():
 
 
 def test_git_abort():
-    repo = tempfile.mkdtemp(prefix="my-emacs-git-")
+    repo = tempfile.mkdtemp(prefix="nano-emacs-git-")
     try:
         subprocess.run(["git", "-C", repo, "init", "-q"], check=True)
         subprocess.run(["git", "-C", repo, "config", "user.name", "Test"], check=True)
@@ -248,7 +248,7 @@ def test_plus_line_argument():
         [b"\x18\x03"],
         cols=COLS,
         rows=ROWS,
-        expect=b"my-emacs",
+        expect=b"nemacs",
     )
     check("+LINE positions the cursor", code == 0 and b"L2 C1" in out)
 
@@ -257,7 +257,7 @@ def test_cli():
     version = subprocess.run([BIN, "--version"], capture_output=True, text=True)
     check(
         "--version works",
-        version.returncode == 0 and "my-emacs" in version.stdout,
+        version.returncode == 0 and "nemacs" in version.stdout,
         repr(version.stdout),
     )
     help_text = subprocess.run([BIN, "--help"], capture_output=True, text=True)

@@ -1,21 +1,20 @@
 [package]
-name = "my-emacs"
+name = "nano-emacs"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.74"
 description = "A tiny Emacs-flavored terminal editor with syntax highlighting"
 license = "MIT"
-repository = "https://github.com/3tty0n/my-emacs"
 readme = "README.md"
 keywords = ["editor", "emacs", "terminal", "tui"]
 categories = ["command-line-utilities"]
 
 [lib]
-name = "my_emacs"
+name = "nano_emacs"
 path = "src/lib.rs"
 
 [[bin]]
-name = "my-emacs"
+name = "nemacs"
 path = "src/main.rs"
 
 [dependencies]

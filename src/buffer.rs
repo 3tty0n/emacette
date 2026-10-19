@@ -1064,11 +1064,11 @@ mod tests {
         let mut buf = buffer("a\r\nb\r\n");
         assert_eq!(buf.line_ending, LineEnding::Crlf);
         assert_eq!(buf.render_text(), "a\r\nb\r\n");
-        buf.save_as(Path::new("/tmp/my-emacs-crlf-test.txt"))
+        buf.save_as(Path::new("/tmp/nano-emacs-crlf-test.txt"))
             .unwrap();
-        let raw = std::fs::read("/tmp/my-emacs-crlf-test.txt").unwrap();
+        let raw = std::fs::read("/tmp/nano-emacs-crlf-test.txt").unwrap();
         assert_eq!(raw, b"a\r\nb\r\n");
-        let _ = std::fs::remove_file("/tmp/my-emacs-crlf-test.txt");
+        let _ = std::fs::remove_file("/tmp/nano-emacs-crlf-test.txt");
     }
 
     #[test]

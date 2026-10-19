@@ -384,7 +384,7 @@ fn build_modeline(editor: &Editor) -> String {
     let mode = editor.mode.name();
     let eol = editor.buffer.line_ending.name();
 
-    let full_left = format!(" my-emacs  {name} {star}  {position}");
+    let full_left = format!(" nemacs  {name} {star}  {position}");
     let full_right = format!("{percent}  {mode}  {eol} ");
     let line = if fits(&full_left, &full_right, width) {
         layout_modeline(&full_left, &full_right, width)
@@ -671,7 +671,7 @@ mod tests {
         let mut ed = Editor::from_text("", None, Config::default());
         ed.overlay = Some(crate::editor::Overlay { scroll: 0 });
         let frame = render(&mut ed, 70, 20);
-        assert!(strip_ansi(&frame.output).contains("my-emacs"));
+        assert!(strip_ansi(&frame.output).contains("nano-emacs"));
         assert!(frame.cursor.is_none());
     }
 

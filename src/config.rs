@@ -1,8 +1,8 @@
 //! Optional user configuration.
 //!
 //! A simple `key = value` file is read from
-//! `$MY_EMACS_CONFIG`, `$XDG_CONFIG_HOME/my-emacs/config`, or
-//! `~/.config/my-emacs/config`. Unknown keys are ignored, so the file can
+//! `$NANO_EMACS_CONFIG`, `$XDG_CONFIG_HOME/nano-emacs/config`, or
+//! `~/.config/nano-emacs/config`. Unknown keys are ignored, so the file can
 //! grow without breaking older builds.
 
 use std::env;
@@ -114,21 +114,21 @@ fn parse_bool(value: &str) -> Option<bool> {
 }
 
 fn config_path() -> Option<PathBuf> {
-    if let Ok(path) = env::var("MY_EMACS_CONFIG") {
+    if let Ok(path) = env::var("NANO_EMACS_CONFIG") {
         if !path.is_empty() {
             return Some(PathBuf::from(path));
         }
     }
     if let Ok(dir) = env::var("XDG_CONFIG_HOME") {
         if !dir.is_empty() {
-            return Some(PathBuf::from(dir).join("my-emacs").join("config"));
+            return Some(PathBuf::from(dir).join("nano-emacs").join("config"));
         }
     }
     let home = env::var("HOME").ok()?;
     Some(
         PathBuf::from(home)
             .join(".config")
-            .join("my-emacs")
+            .join("nano-emacs")
             .join("config"),
     )
 }

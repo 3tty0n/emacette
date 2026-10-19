@@ -2,7 +2,7 @@ PREFIX ?= $(HOME)/.local
 BINDIR ?= $(PREFIX)/bin
 CARGO ?= cargo
 PYTHON ?= python3
-BIN := target/release/my-emacs
+BIN := target/release/nemacs
 
 .PHONY: all build test check fmt smoke bench install uninstall clean
 
@@ -28,10 +28,10 @@ bench: build
 	$(PYTHON) scripts/bench.py $(BIN)
 
 install: build
-	install -Dm755 $(BIN) $(DESTDIR)$(BINDIR)/my-emacs
+	install -Dm755 $(BIN) $(DESTDIR)$(BINDIR)/nemacs
 
 uninstall:
-	rm -f $(DESTDIR)$(BINDIR)/my-emacs
+	rm -f $(DESTDIR)$(BINDIR)/nemacs
 
 clean:
 	$(CARGO) clean

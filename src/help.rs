@@ -8,7 +8,7 @@ pub enum HelpLine {
 }
 
 pub static HELP: &[HelpLine] = &[
-    HelpLine::Heading("my-emacs - a tiny Emacs-flavoured editor"),
+    HelpLine::Heading("nano-emacs - a tiny Emacs-flavoured editor"),
     HelpLine::Blank,
     HelpLine::Text("F1 / q / C-g close this help.  C-n, C-p, SPC scroll."),
     HelpLine::Blank,
@@ -59,7 +59,7 @@ pub static HELP: &[HelpLine] = &[
     HelpLine::Blank,
     HelpLine::Heading("Notes"),
     HelpLine::Text("Alt (Meta) works as ESC followed by the key."),
-    HelpLine::Text("Configuration: ~/.config/my-emacs/config"),
+    HelpLine::Text("Configuration: ~/.config/nano-emacs/config"),
     HelpLine::Text("  tab_width, line_numbers, theme = dark|light, ..."),
 ];
 
