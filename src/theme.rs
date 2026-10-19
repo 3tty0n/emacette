@@ -1,4 +1,4 @@
-//! Colour themes for the syntax highlighter and the UI chrome.
+//! Colour schemes for the syntax highlighter and the UI chrome.
 
 use crate::syntax::{Tok, TOK_COUNT};
 
