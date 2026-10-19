@@ -17,6 +17,12 @@ pub struct Config {
     pub line_numbers: bool,
     pub highlight_trailing_ws: bool,
     pub auto_indent: bool,
+    /// Break typed text at `fill_column` (Emacs `auto-fill-mode`).
+    pub auto_fill: bool,
+    /// Column at which auto-fill breaks lines.
+    pub fill_column: usize,
+    /// Truncate long lines and scroll horizontally instead of wrapping them.
+    pub truncate_lines: bool,
     pub theme: ThemeName,
     /// Comment character used by git's commit message template.
     pub comment_char: char,
@@ -30,6 +36,9 @@ impl Default for Config {
             line_numbers: true,
             highlight_trailing_ws: true,
             auto_indent: true,
+            auto_fill: false,
+            fill_column: 70,
+            truncate_lines: true,
             theme: ThemeName::Dark,
             comment_char: '#',
             confirm_on_quit: true,
@@ -58,7 +67,7 @@ impl Config {
                 continue;
             };
             let key = key.trim().to_ascii_lowercase();
-            let value = value.trim().trim_matches('"').trim_matches('\'');
+            let value = strip_comment(value).trim_matches('"').trim_matches('\'');
             match key.as_str() {
                 "tab_width" | "tab-width" => {
                     if let Ok(n) = value.parse::<usize>() {
@@ -78,6 +87,21 @@ impl Config {
                 "auto_indent" | "auto-indent" => {
                     if let Some(b) = parse_bool(value) {
                         self.auto_indent = b;
+                    }
+                }
+                "auto_fill" | "auto-fill" | "auto_fill_mode" | "auto-fill-mode" => {
+                    if let Some(b) = parse_bool(value) {
+                        self.auto_fill = b;
+                    }
+                }
+                "fill_column" | "fill-column" => {
+                    if let Ok(n) = value.parse::<usize>() {
+                        self.fill_column = n.clamp(1, 1000);
+                    }
+                }
+                "truncate_lines" | "truncate-lines" | "truncate" => {
+                    if let Some(b) = parse_bool(value) {
+                        self.truncate_lines = b;
                     }
                 }
                 "confirm_on_quit" | "confirm-on-quit" => {
@@ -111,6 +135,28 @@ fn parse_bool(value: &str) -> Option<bool> {
         "0" | "false" | "no" | "off" => Some(false),
         _ => None,
     }
+}
+
+/// Remove a `#` comment from a value, but keep `#` inside quotes (so
+/// `comment_char = "#"` still works).
+fn strip_comment(value: &str) -> &str {
+    let mut quote = None;
+    let mut previous = ' ';
+    for (index, c) in value.char_indices() {
+        match quote {
+            Some(q) if c == q => quote = None,
+            Some(_) => {}
+            None => {
+                if matches!(c, '"' | '\'') {
+                    quote = Some(c);
+                } else if c == '#' && previous.is_whitespace() {
+                    return value[..index].trim();
+                }
+            }
+        }
+        previous = c;
+    }
+    value.trim()
 }
 
 fn config_path() -> Option<PathBuf> {
@@ -147,6 +193,9 @@ mod tests {
             line_numbers = no
             theme = light
             auto-indent = true
+            auto_fill = yes
+            fill_column = 42
+            truncate_lines = false
             comment_char = ;
             nonsense = 42
             "#,
@@ -155,6 +204,9 @@ mod tests {
         assert!(!config.line_numbers);
         assert_eq!(config.theme, ThemeName::Light);
         assert!(config.auto_indent);
+        assert!(config.auto_fill);
+        assert_eq!(config.fill_column, 42);
+        assert!(!config.truncate_lines);
         assert_eq!(config.comment_char, ';');
     }
 
@@ -163,5 +215,16 @@ mod tests {
         let mut config = Config::default();
         config.parse("tab_width = 999");
         assert_eq!(config.tab_width, 16);
+    }
+
+    #[test]
+    fn strips_inline_comments_but_keeps_quoted_hashes() {
+        let mut config = Config::default();
+        config.parse(
+            "theme = light # comment\ncomment_char = \"#\" # hash\ntruncate_lines = false # wrap\n",
+        );
+        assert_eq!(config.theme, ThemeName::Light);
+        assert_eq!(config.comment_char, '#');
+        assert!(!config.truncate_lines);
     }
 }

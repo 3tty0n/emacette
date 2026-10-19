@@ -9,12 +9,19 @@ pub enum PromptKind {
 }
 
 #[derive(Clone, Debug)]
+pub struct CompletionState {
+    pub candidates: Vec<String>,
+    pub index: Option<usize>,
+}
+
+#[derive(Clone, Debug)]
 pub struct Minibuffer {
     pub prompt: String,
     pub input: Vec<char>,
     pub cursor: usize,
     pub kind: PromptKind,
     pub hint: String,
+    pub completion: Option<CompletionState>,
     history_index: Option<usize>,
     stash: Vec<char>,
 }
@@ -28,6 +35,7 @@ impl Minibuffer {
             input,
             kind,
             hint: String::new(),
+            completion: None,
             history_index: None,
             stash: Vec::new(),
         }
@@ -37,7 +45,14 @@ impl Minibuffer {
         self.input.iter().collect()
     }
 
+    /// Forget any completion cycle and its hint, e.g. after ordinary editing.
+    pub fn reset_completion(&mut self) {
+        self.completion = None;
+        self.hint.clear();
+    }
+
     pub fn insert(&mut self, c: char) {
+        self.reset_completion();
         self.input.insert(self.cursor, c);
         self.cursor += 1;
     }
@@ -51,6 +66,7 @@ impl Minibuffer {
     }
 
     pub fn backspace(&mut self) -> bool {
+        self.reset_completion();
         if self.cursor == 0 {
             return false;
         }
@@ -60,6 +76,7 @@ impl Minibuffer {
     }
 
     pub fn delete_forward(&mut self) -> bool {
+        self.reset_completion();
         if self.cursor >= self.input.len() {
             return false;
         }
@@ -69,6 +86,7 @@ impl Minibuffer {
 
     /// Delete the word before the cursor (C-w-ish behaviour).
     pub fn delete_word_backward(&mut self) -> String {
+        self.reset_completion();
         let end = self.cursor;
         let mut start = end;
         while start > 0 && self.input[start - 1].is_whitespace() {
@@ -84,6 +102,7 @@ impl Minibuffer {
     }
 
     pub fn kill_to_end(&mut self) -> String {
+        self.reset_completion();
         let removed: String = self.input[self.cursor..].iter().collect();
         self.input.truncate(self.cursor);
         removed
@@ -115,6 +134,7 @@ impl Minibuffer {
     }
 
     pub fn history_prev(&mut self, history: &[String]) {
+        self.reset_completion();
         if history.is_empty() {
             return;
         }
@@ -132,6 +152,7 @@ impl Minibuffer {
     }
 
     pub fn history_next(&mut self, history: &[String]) {
+        self.reset_completion();
         let Some(index) = self.history_index else {
             return;
         };

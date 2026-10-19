@@ -11,7 +11,10 @@ use crate::editor::Editor;
 use crate::help::{HelpLine, HELP};
 use crate::syntax::Span;
 use crate::theme::{Style, Theme};
-use crate::view::{cell_width, char_width, display_col};
+use crate::view::{
+    advance_screen_row, cell_width, char_width, cursor_segment, display_col, segment_start,
+    wrap_end,
+};
 
 pub struct Frame {
     pub output: String,
@@ -55,6 +58,7 @@ impl Renderer {
         editor.view.tab_width = editor.config.tab_width;
         editor.view.line_numbers = editor.config.line_numbers;
         editor.view.highlight_trailing_ws = editor.config.highlight_trailing_ws;
+        editor.view.truncate_lines = editor.config.truncate_lines;
         editor.sync_highlighter();
         editor.view.ensure_visible(&editor.buffer);
 
@@ -176,6 +180,14 @@ fn push_style(out: &mut String, style: Style) {
 }
 
 fn build_text_rows(editor: &mut Editor, body_rows: usize) -> Vec<String> {
+    if editor.view.truncate_lines {
+        build_truncated_text_rows(editor, body_rows)
+    } else {
+        build_wrapped_text_rows(editor, body_rows)
+    }
+}
+
+fn build_truncated_text_rows(editor: &mut Editor, body_rows: usize) -> Vec<String> {
     let line_count = editor.buffer.line_count();
     let gutter = editor.view.gutter(line_count);
     let body_width = editor.view.body_width(line_count);
@@ -246,8 +258,112 @@ fn build_text_rows(editor: &mut Editor, body_rows: usize) -> Vec<String> {
             region,
             search,
             highlight_trailing,
+            0,
+            chars.len(),
+            0,
         );
         rows.push(line);
+    }
+    rows
+}
+
+fn build_wrapped_text_rows(editor: &mut Editor, body_rows: usize) -> Vec<String> {
+    let line_count = editor.buffer.line_count();
+    let gutter = editor.view.gutter(line_count);
+    let body_width = editor.view.body_width(line_count);
+    let digits = line_count.max(1).to_string().len();
+    let current_row = editor.buffer.point.row;
+    let tab_width = editor.view.tab_width;
+    let theme = &editor.theme;
+    let highlight_trailing = editor.view.highlight_trailing_ws;
+    let mut rows = Vec::with_capacity(body_rows);
+
+    let mut row = editor.view.top;
+    let mut segment = editor.view.top_offset;
+    let (mut start_idx, mut start_display) = match editor.buffer.lines.get(row) {
+        Some(line) => segment_start(line, segment, body_width, tab_width),
+        None => (0, 0),
+    };
+
+    for _ in 0..body_rows {
+        if row >= line_count {
+            rows.push(" ".repeat(gutter));
+            continue;
+        }
+
+        let spans: Vec<Span> = {
+            let lines = &editor.buffer.lines;
+            editor.highlighter.tokens(row, lines).to_vec()
+        };
+        let chars = &editor.buffer.lines[row];
+        if start_idx > chars.len() {
+            start_idx = chars.len();
+        }
+        let (end_idx, end_display) =
+            wrap_end(chars, start_idx, start_display, body_width, tab_width);
+
+        let region = editor.buffer.region().and_then(|(start, end)| {
+            if row < start.row || row > end.row {
+                return None;
+            }
+            let from = if row == start.row { start.col } else { 0 };
+            let to = if row == end.row {
+                end.col
+            } else {
+                chars.len() + 1
+            };
+            Some((from, to))
+        });
+        let search = editor.search.as_ref().and_then(|search| {
+            let current = search.current?;
+            if current.row != row {
+                return None;
+            }
+            Some((current.col, current.col + search.query.len()))
+        });
+
+        let mut out = String::new();
+        if gutter > 0 {
+            let style = if row == current_row {
+                theme.gutter_current
+            } else {
+                theme.gutter
+            };
+            push_style(&mut out, style);
+            if segment == 0 {
+                let number = format!(" {:>width$} ", row + 1, width = digits);
+                out.push_str(&number);
+            } else {
+                out.push_str(&" ".repeat(gutter));
+            }
+        }
+        draw_line(
+            &mut out,
+            chars,
+            &spans,
+            0,
+            body_width,
+            tab_width,
+            theme,
+            region,
+            search,
+            highlight_trailing,
+            start_idx,
+            end_idx,
+            start_display,
+        );
+        rows.push(out);
+
+        if end_idx >= chars.len() {
+            row += 1;
+            segment = 0;
+            start_idx = 0;
+            start_display = 0;
+        } else {
+            segment += 1;
+            start_idx = end_idx;
+            start_display = end_display;
+        }
     }
     rows
 }
@@ -264,22 +380,28 @@ fn draw_line(
     region: Option<(usize, usize)>,
     search: Option<(usize, usize)>,
     highlight_trailing: bool,
+    start_idx: usize,
+    end_idx: usize,
+    start_display: usize,
 ) {
-    let mut idx = 0usize;
-    let mut col = 0usize;
-    while idx < chars.len() {
-        let w = char_width(chars[idx], col, tab_width);
-        if col + w > left {
-            break;
+    let end_idx = end_idx.min(chars.len());
+    let mut idx = start_idx.min(end_idx);
+    let mut col = start_display;
+    if left > 0 {
+        while idx < end_idx {
+            let w = char_width(chars[idx], col, tab_width);
+            if col + w > left {
+                break;
+            }
+            col += w;
+            idx += 1;
         }
-        col += w;
-        idx += 1;
-    }
-    if col < left {
-        // A wide character straddles the left edge: pad and skip it.
-        out.push_str(&" ".repeat(left - col));
-        idx += 1;
-        col = left;
+        if col < left && idx < end_idx {
+            // A wide character straddles the left edge: pad and skip it.
+            out.push_str(&" ".repeat(left - col));
+            idx += 1;
+            col = left;
+        }
     }
 
     let trailing_from = chars
@@ -293,7 +415,7 @@ fn draw_line(
     let mut current = theme.text;
     let mut styled = false;
 
-    while idx < chars.len() {
+    while idx < end_idx {
         let c = chars[idx];
         let w = char_width(c, col, tab_width);
         if w > 0 && emitted + w > body_width {
@@ -351,18 +473,73 @@ fn draw_line(
 fn buffer_cursor(editor: &Editor) -> Option<(u16, u16)> {
     let point = editor.buffer.point;
     let body_height = editor.view.body_height();
-    if point.row < editor.view.top || point.row >= editor.view.top + body_height {
+    let line_count = editor.buffer.line_count();
+    let gutter = editor.view.gutter(line_count);
+
+    if editor.view.truncate_lines {
+        if point.row < editor.view.top || point.row >= editor.view.top + body_height {
+            return None;
+        }
+        let line = &editor.buffer.lines[point.row];
+        let col = point.col.min(line.len());
+        let cursor_col = display_col(line, col, editor.view.tab_width);
+        let x = gutter as isize + cursor_col as isize - editor.view.left as isize + 1;
+        if x < 1 || x > editor.view.width as isize {
+            return None;
+        }
+        return Some((x as u16, (point.row - editor.view.top + 1) as u16));
+    }
+
+    if point.row < editor.view.top {
         return None;
     }
+    let body_width = editor.view.body_width(line_count);
     let line = &editor.buffer.lines[point.row];
     let col = point.col.min(line.len());
-    let cursor_col = display_col(line, col, editor.view.tab_width);
-    let gutter = editor.view.gutter(editor.buffer.line_count());
-    let x = gutter as isize + cursor_col as isize - editor.view.left as isize + 1;
+    let (segment, _, _, _) = cursor_segment(line, col, body_width, editor.view.tab_width);
+    if point.row == editor.view.top && segment < editor.view.top_offset {
+        return None;
+    }
+
+    let mut row = editor.view.top;
+    let mut offset = editor.view.top_offset;
+    if row >= line_count {
+        return None;
+    }
+    let (mut start_idx, mut start_display) = segment_start(
+        &editor.buffer.lines[row],
+        offset,
+        body_width,
+        editor.view.tab_width,
+    );
+    let mut screen = 0usize;
+    while row < point.row || (row == point.row && offset < segment) {
+        if screen >= body_height || row >= line_count {
+            return None;
+        }
+        advance_screen_row(
+            &editor.buffer.lines[row],
+            &mut row,
+            &mut offset,
+            &mut start_idx,
+            &mut start_display,
+            body_width,
+            editor.view.tab_width,
+        );
+        screen += 1;
+    }
+    if screen >= body_height {
+        return None;
+    }
+
+    let x_local = display_col(line, col, editor.view.tab_width)
+        .saturating_sub(start_display)
+        .min(body_width.saturating_sub(1));
+    let x = gutter as isize + x_local as isize + 1;
     if x < 1 || x > editor.view.width as isize {
         return None;
     }
-    Some((x as u16, (point.row - editor.view.top + 1) as u16))
+    Some((x as u16, screen as u16 + 1))
 }
 
 fn build_modeline(editor: &Editor) -> String {
@@ -383,16 +560,23 @@ fn build_modeline(editor: &Editor) -> String {
     };
     let mode = editor.mode.name();
     let eol = editor.buffer.line_ending.name();
+    let mut flags = String::new();
+    if editor.config.auto_fill {
+        flags.push_str("Fill ");
+    }
+    if !editor.config.truncate_lines {
+        flags.push_str("Wrap ");
+    }
 
     let full_left = format!(" nemacs  {name} {star}  {position}");
-    let full_right = format!("{percent}  {mode}  {eol} ");
+    let full_right = format!("{percent}  {flags}{mode}  {eol} ");
     let line = if fits(&full_left, &full_right, width) {
         layout_modeline(&full_left, &full_right, width)
     } else {
         // Narrow terminal: keep the file name and the cursor position,
         // dropping the less important pieces first.
         let compact_left = format!(" {name} {star}  {position}");
-        let compact_right = format!("{percent}  {mode} ");
+        let compact_right = format!("{percent}  {flags}{mode} ");
         if fits(&compact_left, &compact_right, width) {
             layout_modeline(&compact_left, &compact_right, width)
         } else {
@@ -648,6 +832,20 @@ mod tests {
     }
 
     #[test]
+    fn modeline_shows_fill_and_wrap_flags() {
+        let config = Config {
+            auto_fill: true,
+            truncate_lines: false,
+            ..Config::default()
+        };
+        let mut ed = Editor::from_text("hello", None, config);
+        let frame = render(&mut ed, 80, 8);
+        let plain = strip_ansi(&frame.output);
+        assert!(plain.contains("Fill"));
+        assert!(plain.contains("Wrap"));
+    }
+
+    #[test]
     fn tiny_terminal_does_not_panic() {
         let mut ed = Editor::from_text("x", None, Config::default());
         for (w, h) in [(1, 1), (2, 2), (3, 1), (10, 2)] {
@@ -686,6 +884,71 @@ mod tests {
         let plain = strip_ansi(&frame.output);
         assert!(plain.contains("あああ"));
         assert!(!plain.contains("L1 C1 "), "cursor should have moved");
+    }
+
+    #[test]
+    fn wrapped_lines_render_across_screen_rows() {
+        let config = Config {
+            truncate_lines: false,
+            ..Config::default()
+        };
+        let text = "0123456789abcdefghijklmnopqrstuvwxyz";
+        let mut ed = Editor::from_text(text, None, config);
+        ed.buffer.point = crate::buffer::Point::new(0, text.chars().count());
+        let frame = render(&mut ed, 20, 10);
+        let plain = strip_ansi(&frame.output);
+        assert!(plain.contains("0123456789"));
+        assert!(plain.contains("uvwx"));
+        assert!(plain.contains("yz"));
+        assert_eq!(ed.view.left, 0);
+        let (x, y) = frame.cursor.expect("cursor should be visible");
+        assert!(x as usize <= 20);
+        assert!(y as usize <= ed.view.body_height());
+    }
+
+    #[test]
+    fn wrapped_cursor_at_an_exact_row_boundary_stays_on_screen() {
+        let config = Config {
+            truncate_lines: false,
+            ..Config::default()
+        };
+        // 20 columns minus a one-line gutter (3) leaves 17 text cells.
+        let text = "x".repeat(17);
+        let mut ed = Editor::from_text(&text, None, config);
+        ed.buffer.point = crate::buffer::Point::new(0, 17);
+        let frame = render(&mut ed, 20, 8);
+        let (x, y) = frame.cursor.expect("cursor should stay visible");
+        assert!(x as usize <= 20);
+        assert!(y as usize <= ed.view.body_height());
+    }
+
+    #[test]
+    fn wrapped_cursor_stays_visible_at_the_end_of_a_long_line() {
+        let config = Config {
+            truncate_lines: false,
+            ..Config::default()
+        };
+        let text = "x".repeat(200);
+        let mut ed = Editor::from_text(&text, None, config);
+        ed.buffer.point = crate::buffer::Point::new(0, 200);
+        let frame = render(&mut ed, 20, 8);
+        assert!(frame.cursor.is_some());
+        assert_eq!(ed.view.left, 0);
+        assert!(ed.view.top_offset > 0);
+    }
+
+    #[test]
+    fn tiny_terminal_wraps_without_panicking() {
+        let config = Config {
+            truncate_lines: false,
+            ..Config::default()
+        };
+        let mut ed = Editor::from_text("日本語の長い行", None, config);
+        ed.buffer.point.col = 7;
+        for (w, h) in [(1, 1), (2, 2), (3, 1), (10, 2)] {
+            let frame = render(&mut ed, w, h);
+            assert!(!frame.output.is_empty());
+        }
     }
 
     #[test]

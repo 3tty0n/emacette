@@ -9,6 +9,8 @@ viewing, and small edits. The binary is `nemacs`.
 - Syntax highlighting for 39 languages and formats, detected by file name,
   extension, or shebang.
 - CJK/full-width text, tabs, horizontal scrolling, line numbers.
+- Optional auto-fill (hard-wraps typed text at `fill_column`) and soft wrapping
+  of long lines (`truncate_lines = false`).
 - Git commit mode: `C-c C-c` saves and exits, `C-c C-k` aborts with exit code 1.
 - UTF-8 input; CRLF line endings are preserved.
 
@@ -112,7 +114,7 @@ the editor.
 | `C-v` `M-v` | Page down / up |
 | `M-g g` | Go to line |
 | `C-l` | Recenter and repaint |
-| `C-d` `DEL` | Delete forward / backward |
+| `C-d` `DEL` | Delete char; delete the active region |
 | `M-d` `M-DEL` | Kill word |
 | `C-k` | Kill to end of line |
 | `C-y` `M-y` | Yank / yank-pop |
@@ -128,6 +130,11 @@ the editor.
 | `M-x` | Run a command by name |
 | `F1` | Help |
 
+After `C-SPC`, moving point selects a region. `C-w` kills it, `M-w` copies it
+to the kill ring, and `DEL` / `C-d` delete it without copying. `C-x C-x`
+swaps point and mark, `C-x h` marks the whole buffer, and `C-g` deactivates
+the mark.
+
 During search, `C-s` / `C-r` repeat, `RET` accepts and sets mark, `C-g`
 restores the original point. Matching is case-insensitive unless the query
 contains an uppercase character.
@@ -136,9 +143,16 @@ contains an uppercase character.
 
 `M-x` runs `save-buffer`, `write-file`, `find-file`, `kill-emacs`, `undo`,
 `redo`, `goto-line`, `toggle-line-numbers`, `toggle-trailing-whitespace`,
-`delete-trailing-whitespace`, `revert-buffer`, `search-forward`,
-`search-backward`, `beginning-of-buffer`, `end-of-buffer`, and `help`.
-`TAB` completes command names and file paths.
+`auto-fill-mode`, `toggle-truncate-lines`, `delete-trailing-whitespace`,
+`revert-buffer`, `search-forward`, `search-backward`, `beginning-of-buffer`,
+`end-of-buffer`, and `help`. Region commands are also available:
+`set-mark-command`, `kill-region`, `kill-ring-save`, `delete-region`,
+`exchange-point-and-mark`, `mark-whole-buffer`, and `deactivate-mark`.
+
+In the minibuffer, `TAB` completes the shared prefix of a command name or
+path. Press `TAB` again to cycle through candidates and `S-TAB` to cycle
+backwards. Path completion resolves relative paths against the current
+buffer's directory and understands `~`, `.`, and `..`.
 
 ## Configuration
 
@@ -156,10 +170,23 @@ tab_width = 4
 line_numbers = true
 highlight_trailing_whitespace = true
 auto_indent = true
+auto_fill = false
+fill_column = 70
+truncate_lines = true        # false = soft-wrap long lines
 theme = dark                 # dark or light
 comment_char = "#"           # match core.commentChar
 confirm_on_quit = true
 ```
+
+## Filling and wrapping
+
+`auto_fill = true` breaks typed text at the last whitespace that fits within
+`fill_column`. Columns are display columns, so wide CJK characters count as
+two. Toggle the mode with `M-x auto-fill-mode`.
+
+`truncate_lines = true` (the default) keeps one buffer line on one screen row
+and scrolls horizontally. Set it to `false`, or run
+`M-x toggle-truncate-lines`, to soft-wrap long lines instead.
 
 ## Languages
 

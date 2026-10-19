@@ -858,6 +858,16 @@ impl Buffer {
         text
     }
 
+    /// Delete the active region without touching the kill ring.
+    pub fn delete_region(&mut self) -> String {
+        let Some((start, end)) = self.region() else {
+            return String::new();
+        };
+        let removed = self.delete_range(start, end);
+        self.mark = None;
+        removed
+    }
+
     pub fn kill_line(&mut self) -> String {
         let row = self.point.row;
         let col = self.point.col;

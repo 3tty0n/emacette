@@ -39,6 +39,109 @@ pub fn display_col(line: &[char], char_col: usize, tab_width: usize) -> usize {
     col
 }
 
+/// End of one wrapped screen row.  Returns `(end_index, end_display_col)`.
+/// `start_display` is the absolute display column of `start_idx`, so tabs
+/// keep expanding to their real stops after a wrap.
+pub(crate) fn wrap_end(
+    line: &[char],
+    start_idx: usize,
+    start_display: usize,
+    width: usize,
+    tab_width: usize,
+) -> (usize, usize) {
+    let n = line.len();
+    let mut idx = start_idx.min(n);
+    let mut col = start_display;
+    let width = width.max(1);
+    while idx < n {
+        let w = char_width(line[idx], col, tab_width);
+        if w > 0 && col - start_display + w > width {
+            break;
+        }
+        col += w;
+        idx += 1;
+    }
+    if idx == start_idx && idx < n {
+        // A single character wider than the screen: keep it so callers make
+        // progress even on absurdly narrow terminals.
+        col += char_width(line[idx], col, tab_width);
+        idx += 1;
+    }
+    (idx, col)
+}
+
+/// Locate the wrapped segment containing `char_col`.
+///
+/// Returns `(segment_index, segment_start_idx, segment_start_display,
+/// segment_end_idx)`.
+pub(crate) fn cursor_segment(
+    line: &[char],
+    char_col: usize,
+    width: usize,
+    tab_width: usize,
+) -> (usize, usize, usize, usize) {
+    let col = char_col.min(line.len());
+    let mut segment = 0;
+    let mut start_idx = 0;
+    let mut start_display = 0;
+    loop {
+        let (end, end_display) = wrap_end(line, start_idx, start_display, width, tab_width);
+        if col < end || end >= line.len() {
+            return (segment, start_idx, start_display, end);
+        }
+        segment += 1;
+        start_idx = end;
+        start_display = end_display;
+    }
+}
+
+/// Start char index and absolute display column of a wrapped segment.
+pub(crate) fn segment_start(
+    line: &[char],
+    segment: usize,
+    width: usize,
+    tab_width: usize,
+) -> (usize, usize) {
+    let mut start_idx = 0;
+    let mut start_display = 0;
+    for _ in 0..segment {
+        if start_idx >= line.len() {
+            break;
+        }
+        let (end, end_display) = wrap_end(line, start_idx, start_display, width, tab_width);
+        if end == start_idx {
+            break;
+        }
+        start_idx = end;
+        start_display = end_display;
+    }
+    (start_idx, start_display)
+}
+
+/// Advance one wrapped screen row.  The caller keeps `start_idx` and
+/// `start_display` in sync so scanning a very long line stays linear.
+pub(crate) fn advance_screen_row(
+    line: &[char],
+    row: &mut usize,
+    offset: &mut usize,
+    start_idx: &mut usize,
+    start_display: &mut usize,
+    width: usize,
+    tab_width: usize,
+) {
+    let (end, end_display) = wrap_end(line, *start_idx, *start_display, width, tab_width);
+    if end >= line.len() {
+        *row += 1;
+        *offset = 0;
+        *start_idx = 0;
+        *start_display = 0;
+    } else {
+        *offset += 1;
+        *start_idx = end;
+        *start_display = end_display;
+    }
+}
+
 /// Width reserved for the line-number gutter (including its trailing space).
 pub fn gutter_width(line_count: usize, enabled: bool) -> usize {
     if !enabled {
@@ -51,11 +154,16 @@ pub fn gutter_width(line_count: usize, enabled: bool) -> usize {
 pub struct View {
     pub width: usize,
     pub height: usize,
+    /// First visible buffer row.
     pub top: usize,
+    /// First visible wrapped segment within `top` (only used when wrapping).
+    pub top_offset: usize,
+    /// Horizontal scroll in display cells (only used when truncating).
     pub left: usize,
     pub line_numbers: bool,
     pub tab_width: usize,
     pub highlight_trailing_ws: bool,
+    pub truncate_lines: bool,
 }
 
 impl Default for View {
@@ -64,10 +172,12 @@ impl Default for View {
             width: 80,
             height: 24,
             top: 0,
+            top_offset: 0,
             left: 0,
             line_numbers: true,
             tab_width: 4,
             highlight_trailing_ws: true,
+            truncate_lines: true,
         }
     }
 }
@@ -87,6 +197,15 @@ impl View {
     }
 
     pub fn ensure_visible(&mut self, buffer: &Buffer) {
+        if self.truncate_lines {
+            self.ensure_visible_truncated(buffer);
+        } else {
+            self.ensure_visible_wrapped(buffer);
+        }
+    }
+
+    fn ensure_visible_truncated(&mut self, buffer: &Buffer) {
+        self.top_offset = 0;
         let body = self.body_height();
         let point = buffer.point;
 
@@ -128,9 +247,95 @@ impl View {
         }
     }
 
+    fn ensure_visible_wrapped(&mut self, buffer: &Buffer) {
+        let body = self.body_height();
+        let body_width = self.body_width(buffer.line_count());
+        let line_count = buffer.line_count();
+        let point = buffer.point;
+        let point_line = &buffer.lines[point.row];
+        let col = point.col.min(point_line.len());
+        let (point_seg, _, _, _) = cursor_segment(point_line, col, body_width, self.tab_width);
+
+        if point.row < self.top || (point.row == self.top && point_seg < self.top_offset) {
+            self.top = point.row;
+            self.top_offset = point_seg;
+        }
+        if self.top >= line_count {
+            self.top = line_count.saturating_sub(1);
+            self.top_offset = 0;
+        }
+        // A resize or an edit can leave top_offset past the last wrapped
+        // segment of the top row; start that row from the beginning instead
+        // of showing an empty continuation row.
+        if self.top_offset > 0 {
+            let line = &buffer.lines[self.top];
+            let (start_idx, _) = segment_start(line, self.top_offset, body_width, self.tab_width);
+            if start_idx >= line.len() {
+                self.top_offset = 0;
+            }
+        }
+        // Each buffer row needs at least one screen row, so a point this far
+        // below cannot be on screen.  Jump near it before counting wrapped
+        // rows, which keeps movement through huge files cheap.
+        if point.row >= self.top.saturating_add(body) {
+            self.top = point.row.saturating_sub(body.saturating_sub(1));
+            self.top_offset = 0;
+        }
+
+        let mut row = self.top;
+        let mut offset = self.top_offset;
+        let (mut start_idx, mut start_display) =
+            segment_start(&buffer.lines[row], offset, body_width, self.tab_width);
+        let mut before = 0usize;
+        while row < point.row || (row == point.row && offset < point_seg) {
+            if row >= line_count {
+                break;
+            }
+            advance_screen_row(
+                &buffer.lines[row],
+                &mut row,
+                &mut offset,
+                &mut start_idx,
+                &mut start_display,
+                body_width,
+                self.tab_width,
+            );
+            before += 1;
+        }
+        if before >= body {
+            let shift = before - body + 1;
+            let mut row = self.top;
+            let mut offset = self.top_offset;
+            let (mut start_idx, mut start_display) =
+                segment_start(&buffer.lines[row], offset, body_width, self.tab_width);
+            for _ in 0..shift {
+                if row >= line_count {
+                    break;
+                }
+                advance_screen_row(
+                    &buffer.lines[row],
+                    &mut row,
+                    &mut offset,
+                    &mut start_idx,
+                    &mut start_display,
+                    body_width,
+                    self.tab_width,
+                );
+            }
+            self.top = row;
+            self.top_offset = offset;
+        }
+        if self.top >= line_count {
+            self.top = line_count.saturating_sub(1);
+            self.top_offset = 0;
+        }
+        self.left = 0;
+    }
+
     pub fn recenter(&mut self, buffer: &Buffer) {
         let body = self.body_height();
         self.top = buffer.point.row.saturating_sub(body / 2);
+        self.top_offset = 0;
         let max_top = buffer.line_count().saturating_sub(1);
         if self.top > max_top {
             self.top = max_top;
@@ -172,5 +377,59 @@ mod tests {
         buffer.point = crate::buffer::Point::new(50, 0);
         view.ensure_visible(&buffer);
         assert!(view.top <= 50 && view.top + view.body_height() > 50);
+    }
+
+    #[test]
+    fn wrapping_splits_at_display_width() {
+        let line: Vec<char> = "abcdefghij".chars().collect();
+        assert_eq!(wrap_end(&line, 0, 0, 4, 4), (4, 4));
+        assert_eq!(wrap_end(&line, 4, 4, 4, 4), (8, 8));
+        assert_eq!(wrap_end(&line, 8, 8, 4, 4), (10, 10));
+
+        let line: Vec<char> = "あああ".chars().collect();
+        assert_eq!(wrap_end(&line, 0, 0, 4, 4), (2, 4));
+    }
+
+    #[test]
+    fn cursor_segment_maps_columns_to_rows() {
+        let line: Vec<char> = "abcdefghij".chars().collect();
+        assert_eq!(cursor_segment(&line, 0, 4, 4), (0, 0, 0, 4));
+        assert_eq!(cursor_segment(&line, 3, 4, 4), (0, 0, 0, 4));
+        assert_eq!(cursor_segment(&line, 4, 4, 4), (1, 4, 4, 8));
+        assert_eq!(cursor_segment(&line, 10, 4, 4), (2, 8, 8, 10));
+    }
+
+    #[test]
+    fn wrapped_view_keeps_cursor_visible() {
+        let text = "x".repeat(200);
+        let mut buffer = Buffer::from_text(&text, None);
+        buffer.point = crate::buffer::Point::new(0, 200);
+        let mut view = View {
+            width: 20,
+            height: 8,
+            line_numbers: false,
+            truncate_lines: false,
+            ..View::default()
+        };
+        view.ensure_visible(&buffer);
+        assert_eq!(view.left, 0);
+        assert!(view.top_offset > 0);
+    }
+
+    #[test]
+    fn wrapped_view_scrolls_between_lines() {
+        let text = format!("{}\nsecond\n", "x".repeat(100));
+        let mut buffer = Buffer::from_text(&text, None);
+        buffer.point = crate::buffer::Point::new(1, 0);
+        let mut view = View {
+            width: 20,
+            height: 6,
+            line_numbers: false,
+            truncate_lines: false,
+            ..View::default()
+        };
+        view.ensure_visible(&buffer);
+        assert_eq!(view.left, 0);
+        assert!(view.top > 0 || view.top_offset > 0);
     }
 }

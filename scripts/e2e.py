@@ -103,6 +103,72 @@ def test_mark_and_kill_region():
     check("C-SPC / C-w kill a region", code == 0 and content == " world\n", repr(content))
 
 
+def test_region_delete_and_copy():
+    path = tmpfile("hello world\n")
+    code, out, _ = run(
+        [BIN, path],
+        [b"\x00", b"\x06" * 5, b"\x7f", b"\x18\x13", b"\x18\x03"],
+        cols=COLS,
+        rows=ROWS,
+        expect=b"nemacs",
+    )
+    with open(path, encoding="utf-8") as handle:
+        content = handle.read()
+    check(
+        "DEL deletes the active region",
+        code == 0 and content == " world\n",
+        repr(content),
+    )
+
+    path = tmpfile("hello world\n")
+    code, out, _ = run(
+        [BIN, path],
+        [b"\x00", b"\x06" * 5, b"\x1bw", b"\x05", b"\x19", b"\x18\x13", b"\x18\x03"],
+        cols=COLS,
+        rows=ROWS,
+        expect=b"nemacs",
+    )
+    with open(path, encoding="utf-8") as handle:
+        content = handle.read()
+    check(
+        "M-w copies a region and C-y yanks it",
+        code == 0 and content == "hello worldhello\n",
+        repr(content),
+    )
+
+
+def test_find_file_tab_completion():
+    directory = tempfile.mkdtemp(prefix="nano-emacs-e2e-")
+    start = os.path.join(directory, "note.txt")
+    with open(start, "w", encoding="utf-8") as handle:
+        handle.write("start\n")
+    for name in ("alpha.txt", "alphabet.txt"):
+        with open(os.path.join(directory, name), "w", encoding="utf-8") as handle:
+            handle.write(f"{name}\n")
+    code, out, _ = run(
+        [BIN, start],
+        [
+            b"\x18\x06",  # C-x C-f
+            b"\x01\x0b",  # C-a C-k: clear the initial directory
+            b"al",
+            b"\t",
+            b"\t",
+            b"\t",
+            b"\r",
+            b"\x18\x03",
+        ],
+        cols=COLS,
+        rows=ROWS,
+        expect=b"nemacs",
+    )
+    screen = body_screen(out)
+    check(
+        "find-file TAB cycles candidates",
+        code == 0 and "alphabet" in screen,
+        repr(screen[-300:]),
+    )
+
+
 def test_escape_meta_word_motion():
     path = tmpfile("")
     code, out, _ = run(
@@ -293,6 +359,8 @@ def main():
     test_japanese_input()
     test_undo_key()
     test_mark_and_kill_region()
+    test_region_delete_and_copy()
+    test_find_file_tab_completion()
     test_escape_meta_word_motion()
     test_search_and_insert()
     test_help_overlay()

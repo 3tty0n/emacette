@@ -10,11 +10,11 @@ use crate::config::Config;
 use crate::help;
 use crate::highlight::Highlighter;
 use crate::key::{Key, KeyCode};
-use crate::minibuffer::{Minibuffer, PromptKind};
+use crate::minibuffer::{CompletionState, Minibuffer, PromptKind};
 use crate::search::{find_backward, find_forward, find_last, SearchState};
 use crate::syntax::Lang;
 use crate::theme::Theme;
-use crate::view::{display_col, View};
+use crate::view::{char_width, display_col, View};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Cmd {
@@ -27,6 +27,15 @@ pub enum Cmd {
     GotoLine,
     ToggleLineNumbers,
     ToggleTrailingWs,
+    ToggleAutoFill,
+    ToggleTruncateLines,
+    SetMark,
+    KillRegion,
+    CopyRegion,
+    DeleteRegion,
+    ExchangePointAndMark,
+    MarkWholeBuffer,
+    DeactivateMark,
     Revert,
     DeleteTrailingWs,
     Help,
@@ -47,6 +56,17 @@ pub const COMMANDS: &[(&str, Cmd)] = &[
     ("goto-line", Cmd::GotoLine),
     ("toggle-line-numbers", Cmd::ToggleLineNumbers),
     ("toggle-trailing-whitespace", Cmd::ToggleTrailingWs),
+    ("auto-fill-mode", Cmd::ToggleAutoFill),
+    ("toggle-auto-fill", Cmd::ToggleAutoFill),
+    ("toggle-truncate-lines", Cmd::ToggleTruncateLines),
+    ("set-mark-command", Cmd::SetMark),
+    ("kill-region", Cmd::KillRegion),
+    ("kill-ring-save", Cmd::CopyRegion),
+    ("copy-region-as-kill", Cmd::CopyRegion),
+    ("delete-region", Cmd::DeleteRegion),
+    ("exchange-point-and-mark", Cmd::ExchangePointAndMark),
+    ("mark-whole-buffer", Cmd::MarkWholeBuffer),
+    ("deactivate-mark", Cmd::DeactivateMark),
     ("revert-buffer", Cmd::Revert),
     ("delete-trailing-whitespace", Cmd::DeleteTrailingWs),
     ("help", Cmd::Help),
@@ -145,6 +165,7 @@ impl Editor {
             line_numbers: config.line_numbers,
             tab_width: config.tab_width,
             highlight_trailing_ws: config.highlight_trailing_ws,
+            truncate_lines: config.truncate_lines,
             ..View::default()
         };
         Self {
@@ -216,6 +237,7 @@ impl Editor {
         self.highlighter = Highlighter::new(self.mode, buffer.version);
         self.buffer = buffer;
         self.view.top = 0;
+        self.view.top_offset = 0;
         self.view.left = 0;
         self.search = None;
         self.prefix = None;
@@ -308,6 +330,9 @@ impl Editor {
             KeyCode::Char(c) if key.alt => self.handle_alt(c),
             KeyCode::Char(c) => {
                 self.buffer.insert_char(c);
+                if self.config.auto_fill {
+                    self.auto_fill();
+                }
             }
             KeyCode::Enter => {
                 self.buffer.newline(self.config.auto_indent);
@@ -318,10 +343,14 @@ impl Editor {
                 self.buffer.kill_word_backward();
             }
             KeyCode::Backspace => {
-                self.buffer.delete_backward();
+                if !self.delete_active_region() {
+                    self.buffer.delete_backward();
+                }
             }
             KeyCode::Delete => {
-                self.buffer.delete_forward();
+                if !self.delete_active_region() {
+                    self.buffer.delete_forward();
+                }
             }
             KeyCode::Esc => {
                 self.meta_prefix = true;
@@ -354,20 +383,20 @@ impl Editor {
             'p' => self.buffer.move_vertical(-1),
             'v' => self.page(1),
             'd' => {
-                self.buffer.delete_forward();
+                if !self.delete_active_region() {
+                    self.buffer.delete_forward();
+                }
             }
             'h' => {
-                self.buffer.delete_backward();
+                if !self.delete_active_region() {
+                    self.buffer.delete_backward();
+                }
             }
             'k' => {
                 self.buffer.kill_line();
             }
             'y' => self.yank(),
-            'w' => {
-                if self.buffer.kill_region().is_empty() {
-                    self.message = "No active region".into();
-                }
-            }
+            'w' => self.kill_region(),
             'g' => {
                 self.buffer.deactivate_mark();
                 self.message = "Quit".into();
@@ -427,13 +456,7 @@ impl Editor {
             '<' => self.buffer.move_buffer_start(),
             '>' => self.buffer.move_buffer_end(),
             'v' => self.page(-1),
-            'w' => {
-                if self.buffer.copy_region().is_empty() {
-                    self.message = "No active region".into();
-                } else {
-                    self.message = "Copied region".into();
-                }
-            }
+            'w' => self.copy_region(),
             'y' => {
                 if self.buffer.yank_pop() {
                     self.message = "Yank-pop".into();
@@ -507,6 +530,31 @@ impl Editor {
         }
     }
 
+    fn delete_active_region(&mut self) -> bool {
+        if self.buffer.region().is_none() {
+            return false;
+        }
+        let removed = self.buffer.delete_region();
+        self.message = format!("Deleted {} characters", removed.chars().count());
+        true
+    }
+
+    fn kill_region(&mut self) {
+        if self.buffer.kill_region().is_empty() {
+            self.message = "No active region".into();
+        } else {
+            self.message = "Killed region".into();
+        }
+    }
+
+    fn copy_region(&mut self) {
+        if self.buffer.copy_region().is_empty() {
+            self.message = "No active region".into();
+        } else {
+            self.message = "Copied region".into();
+        }
+    }
+
     fn indent(&mut self) {
         let row = self.buffer.point.row;
         let col = display_col(
@@ -517,6 +565,52 @@ impl Editor {
         let spaces = self.config.tab_width - (col % self.config.tab_width);
         let text = " ".repeat(spaces);
         self.buffer.insert_text(&text);
+    }
+
+    /// `auto-fill-mode`: break the current line at the last whitespace that
+    /// fits within `fill_column` after a self-insert.
+    fn auto_fill(&mut self) {
+        let fill_column = self.config.fill_column;
+        if fill_column == 0 {
+            return;
+        }
+        let row = self.buffer.point.row;
+        let tab_width = self.config.tab_width;
+        let (point_col, break_col, indent_len) = {
+            let line = &self.buffer.lines[row];
+            let point_col = self.buffer.point.col.min(line.len());
+            if display_col(line, point_col, tab_width) <= fill_column {
+                return;
+            }
+            let indent_len = line
+                .iter()
+                .take_while(|c| **c == ' ' || **c == '\t')
+                .count();
+            let mut col = display_col(line, indent_len, tab_width);
+            let mut break_col = None;
+            for (idx, c) in line.iter().enumerate().take(point_col).skip(indent_len) {
+                let c = *c;
+                if (c == ' ' || c == '\t') && col <= fill_column {
+                    break_col = Some(idx);
+                }
+                col += char_width(c, col, tab_width);
+                if col > fill_column {
+                    break;
+                }
+            }
+            (point_col, break_col, indent_len)
+        };
+        let Some(break_col) = break_col else {
+            return;
+        };
+        if break_col <= indent_len {
+            return;
+        }
+        let new_col = indent_len + (point_col - break_col - 1);
+        self.buffer.point = Point::new(row, break_col);
+        self.buffer.delete_forward();
+        self.buffer.newline(true);
+        self.buffer.point = Point::new(row + 1, new_col);
     }
 
     fn unindent(&mut self) {
@@ -821,9 +915,15 @@ impl Editor {
         if self.minibuffer.is_none() {
             return;
         }
+        let completion_key = matches!(key.code, KeyCode::Tab | KeyCode::BackTab);
+        if !completion_key {
+            if let Some(mb) = self.minibuffer.as_mut() {
+                mb.reset_completion();
+            }
+        }
         let mut history_prev = false;
         let mut history_next = false;
-        let mut complete = false;
+        let mut complete = None;
         let mut accept = false;
         let mut cancel = false;
         {
@@ -861,7 +961,8 @@ impl Editor {
                 KeyCode::Right => mb.right(),
                 KeyCode::Home => mb.home(),
                 KeyCode::End => mb.end(),
-                KeyCode::Tab => complete = true,
+                KeyCode::Tab => complete = Some(true),
+                KeyCode::BackTab => complete = Some(false),
                 KeyCode::Enter => accept = true,
                 KeyCode::Esc => cancel = true,
                 KeyCode::Up => history_prev = true,
@@ -879,8 +980,8 @@ impl Editor {
                 mb.history_next(&self.history);
             }
         }
-        if complete {
-            self.complete();
+        if let Some(forward) = complete {
+            self.complete(forward);
         }
         if accept {
             self.accept_minibuffer();
@@ -995,10 +1096,18 @@ impl Editor {
         }
     }
 
-    fn complete(&mut self) {
+    fn complete(&mut self, forward: bool) {
         let Some(kind) = self.minibuffer.as_ref().map(|m| m.kind.clone()) else {
             return;
         };
+        let directory_input = matches!(kind, PromptKind::FindFile | PromptKind::WriteFile { .. })
+            && self
+                .minibuffer
+                .as_ref()
+                .is_some_and(|mb| mb.text().ends_with('/'));
+        if !directory_input && self.cycle_completion(forward) {
+            return;
+        }
         match kind {
             PromptKind::Mx => self.complete_command(),
             PromptKind::FindFile | PromptKind::WriteFile { .. } => self.complete_path(),
@@ -1006,42 +1115,122 @@ impl Editor {
         }
     }
 
-    fn complete_command(&mut self) {
+    /// Handle repeated Tab presses: keep the original candidate set even when
+    /// the inserted candidate no longer matches the shorter typed prefix.
+    fn cycle_completion(&mut self, forward: bool) -> bool {
+        let Some(mb) = self.minibuffer.as_mut() else {
+            return false;
+        };
+        let Some(mut state) = mb.completion.take() else {
+            return false;
+        };
+        let len = state.candidates.len();
+        if len == 0 {
+            return false;
+        }
+        let current = mb.text();
+        let selected = match state.index {
+            Some(index) if index < len && current == state.candidates[index] => {
+                if forward {
+                    (index + 1) % len
+                } else {
+                    (index + len - 1) % len
+                }
+            }
+            None => match state.candidates.iter().position(|c| *c == current) {
+                // The shared prefix is already a complete candidate; show
+                // that candidate now and start cycling from it next time.
+                Some(index) => index,
+                None => {
+                    if forward {
+                        0
+                    } else {
+                        len - 1
+                    }
+                }
+            },
+            _ => {
+                // Stale cycle (the text was changed outside the completion
+                // UI); fall back to a fresh completion pass.
+                return false;
+            }
+        };
+        let candidate = state.candidates[selected].clone();
+        mb.set_text(&candidate);
+        state.index = Some(selected);
+        let hint = format!(
+            "[{}/{}] {}",
+            selected + 1,
+            len,
+            completion_preview(&state.candidates)
+        );
+        mb.completion = Some(state);
+        mb.hint = hint;
+        true
+    }
+
+    /// Insert the shared prefix of `candidates`.  `candidates` are the exact
+    /// strings to put in the minibuffer (file names, complete paths, or
+    /// command names).
+    fn offer_completions(&mut self, candidates: Vec<String>, noun: &str) {
         let Some(mb) = self.minibuffer.as_mut() else {
             return;
         };
+        if candidates.is_empty() {
+            mb.reset_completion();
+            mb.hint = "No match".into();
+            return;
+        }
+        if candidates.len() == 1 {
+            mb.set_text(&candidates[0]);
+            mb.completion = None;
+            mb.hint.clear();
+            return;
+        }
+        let current = mb.text();
+        let prefix = common_prefix(&candidates);
+        if prefix.chars().count() > current.chars().count() {
+            mb.set_text(&prefix);
+        }
+        mb.completion = Some(CompletionState {
+            candidates: candidates.clone(),
+            index: None,
+        });
+        mb.hint = format!(
+            "{} {}: {}",
+            candidates.len(),
+            noun,
+            completion_preview(&candidates)
+        );
+    }
+
+    fn complete_command(&mut self) {
+        let Some(mb) = self.minibuffer.as_ref() else {
+            return;
+        };
         let text = mb.text();
-        let names: Vec<String> = COMMANDS
+        let candidates: Vec<String> = COMMANDS
             .iter()
             .map(|(name, _)| (*name).to_string())
             .filter(|name| name.starts_with(&text))
             .collect();
-        if names.is_empty() {
-            mb.hint = "No match".into();
-            return;
-        }
-        if names.len() == 1 {
-            mb.set_text(&names[0]);
-            mb.hint.clear();
-            return;
-        }
-        let prefix = common_prefix(&names);
-        if prefix.chars().count() > text.chars().count() {
-            mb.set_text(&prefix);
-        }
-        mb.hint = format!(
-            "{} commands: {}",
-            names.len(),
-            names.iter().take(5).cloned().collect::<Vec<_>>().join(" ")
-        );
+        self.offer_completions(candidates, "commands");
     }
 
     fn complete_path(&mut self) {
         let base_dir = self.buffer.dir();
-        let Some(mb) = self.minibuffer.as_mut() else {
-            return;
+        let raw = {
+            let Some(mb) = self.minibuffer.as_mut() else {
+                return;
+            };
+            let raw = mb.text();
+            // A directory candidate ends in `/`; the next Tab should list
+            // its contents rather than cycle through the parent's siblings.
+            if raw.ends_with('/') {
+                mb.reset_completion();
+            }
+            raw
         };
-        let raw = mb.text();
         let (dir_part, name_part) = match raw.rfind('/') {
             Some(i) => (&raw[..=i], &raw[i + 1..]),
             None => ("", raw.as_str()),
@@ -1049,46 +1238,46 @@ impl Editor {
         let dir = if dir_part.is_empty() {
             base_dir
         } else {
-            expand_tilde(dir_part)
+            let expanded = expand_tilde(dir_part);
+            if expanded.is_absolute() {
+                expanded
+            } else {
+                base_dir.join(expanded)
+            }
         };
+
         let mut entries: Vec<(String, bool)> = Vec::new();
-        if let Ok(read_dir) = fs::read_dir(&dir) {
-            for entry in read_dir.flatten() {
-                let name = entry.file_name().to_string_lossy().into_owned();
-                if !name.starts_with(name_part) {
-                    continue;
-                }
-                if name.starts_with('.') && !name_part.starts_with('.') {
-                    continue;
-                }
-                entries.push((name, entry.path().is_dir()));
+        let Ok(read_dir) = fs::read_dir(&dir) else {
+            if let Some(mb) = self.minibuffer.as_mut() {
+                mb.reset_completion();
+                mb.hint = format!("No match in {}", dir.display());
+            }
+            return;
+        };
+        for entry in read_dir.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if !name.starts_with(name_part) {
+                continue;
+            }
+            if name.starts_with('.') && !name_part.starts_with('.') {
+                continue;
+            }
+            entries.push((name, entry.path().is_dir()));
+        }
+        if name_part.starts_with('.') {
+            if ".".starts_with(name_part) {
+                entries.push((".".to_string(), true));
+            }
+            if "..".starts_with(name_part) {
+                entries.push(("..".to_string(), true));
             }
         }
         entries.sort();
-        if entries.is_empty() {
-            mb.hint = format!("No match in {}", dir.display());
-            return;
-        }
-        if entries.len() == 1 {
-            let (name, is_dir) = &entries[0];
-            let mut new = format!("{dir_part}{name}");
-            if *is_dir {
-                new.push('/');
-            }
-            mb.set_text(&new);
-            mb.hint.clear();
-            return;
-        }
-        let names: Vec<String> = entries.iter().map(|(n, _)| n.clone()).collect();
-        let prefix = common_prefix(&names);
-        if prefix.chars().count() > name_part.chars().count() {
-            mb.set_text(&format!("{dir_part}{prefix}"));
-        }
-        mb.hint = format!(
-            "{} candidates: {}",
-            entries.len(),
-            names.iter().take(4).cloned().collect::<Vec<_>>().join(" ")
-        );
+        let candidates: Vec<String> = entries
+            .into_iter()
+            .map(|(name, is_dir)| format!("{dir_part}{name}{}", if is_dir { "/" } else { "" }))
+            .collect();
+        self.offer_completions(candidates, "candidates");
     }
 
     fn resolve_path(&self, input: &str) -> PathBuf {
@@ -1187,6 +1376,52 @@ impl Editor {
                         "off"
                     }
                 );
+            }
+            Cmd::ToggleAutoFill => {
+                self.config.auto_fill = !self.config.auto_fill;
+                self.message = format!(
+                    "Auto-fill mode {}",
+                    if self.config.auto_fill { "on" } else { "off" }
+                );
+            }
+            Cmd::ToggleTruncateLines => {
+                self.config.truncate_lines = !self.config.truncate_lines;
+                self.view.truncate_lines = self.config.truncate_lines;
+                self.view.left = 0;
+                self.view.top_offset = 0;
+                self.needs_redraw = true;
+                self.message = format!(
+                    "Truncate lines {}",
+                    if self.config.truncate_lines {
+                        "on"
+                    } else {
+                        "off (wrapping)"
+                    }
+                );
+            }
+            Cmd::SetMark => {
+                self.buffer.set_mark();
+                self.message = "Mark set".into();
+            }
+            Cmd::KillRegion => self.kill_region(),
+            Cmd::CopyRegion => self.copy_region(),
+            Cmd::DeleteRegion => {
+                if !self.delete_active_region() {
+                    self.message = "No active region".into();
+                }
+            }
+            Cmd::ExchangePointAndMark => {
+                if !self.buffer.exchange_point_and_mark() {
+                    self.message = "No mark set".into();
+                }
+            }
+            Cmd::MarkWholeBuffer => {
+                self.buffer.mark_whole_buffer();
+                self.message = "Mark set".into();
+            }
+            Cmd::DeactivateMark => {
+                self.buffer.deactivate_mark();
+                self.message = "Mark deactivated".into();
             }
             Cmd::Revert => self.revert_buffer(),
             Cmd::DeleteTrailingWs => {
@@ -1313,12 +1548,151 @@ fn common_prefix(items: &[String]) -> String {
     prefix.into_iter().collect()
 }
 
+fn completion_preview(candidates: &[String]) -> String {
+    let mut preview = candidates
+        .iter()
+        .take(5)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(" ");
+    if candidates.len() > 5 {
+        preview.push_str(" ...");
+    }
+    preview
+}
+
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
     use super::*;
 
     fn editor(text: &str) -> Editor {
         Editor::from_text(text, None, Config::default())
+    }
+
+    fn temp_dir() -> PathBuf {
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::SeqCst);
+        let dir = std::env::temp_dir().join(format!(
+            "nano-emacs-completion-{}-{}",
+            std::process::id(),
+            n
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn editor_in(dir: &Path, text: &str) -> Editor {
+        Editor::from_text(text, Some(dir.join("buffer.txt")), Config::default())
+    }
+
+    #[test]
+    fn command_completion_extends_and_cycles() {
+        let mut ed = editor("");
+        ed.start_mx();
+        ed.minibuffer.as_mut().unwrap().set_text("save-bu");
+        ed.complete(true);
+        assert_eq!(ed.minibuffer_text().as_deref(), Some("save-buffer"));
+        assert!(ed.minibuffer.as_ref().unwrap().hint.contains("2 commands"));
+
+        ed.complete(true);
+        assert_eq!(ed.minibuffer_text().as_deref(), Some("save-buffer"));
+        ed.complete(true);
+        assert_eq!(
+            ed.minibuffer_text().as_deref(),
+            Some("save-buffers-kill-terminal")
+        );
+        ed.complete(false);
+        assert_eq!(ed.minibuffer_text().as_deref(), Some("save-buffer"));
+    }
+
+    #[test]
+    fn path_completion_resolves_against_the_buffer_directory() {
+        let dir = temp_dir();
+        fs::create_dir_all(dir.join("sub")).unwrap();
+        fs::write(dir.join("sub/inside.txt"), "inside").unwrap();
+        let mut ed = editor_in(&dir, "");
+
+        ed.prompt_find_file();
+        ed.minibuffer.as_mut().unwrap().set_text("sub/in");
+        ed.complete(true);
+        assert_eq!(
+            ed.minibuffer_text().as_deref(),
+            Some("sub/inside.txt"),
+            "relative paths must resolve from the buffer's directory"
+        );
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn path_completion_completes_directories_with_a_slash() {
+        let dir = temp_dir();
+        fs::create_dir_all(dir.join("sub")).unwrap();
+        fs::write(dir.join("sub/inside.txt"), "inside").unwrap();
+        let mut ed = editor_in(&dir, "");
+
+        ed.prompt_find_file();
+        ed.minibuffer.as_mut().unwrap().set_text("su");
+        ed.complete(true);
+        assert_eq!(ed.minibuffer_text().as_deref(), Some("sub/"));
+
+        ed.complete(true);
+        assert_eq!(ed.minibuffer_text().as_deref(), Some("sub/inside.txt"));
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn cycling_into_a_directory_lists_its_contents() {
+        let dir = temp_dir();
+        fs::create_dir_all(dir.join("sub")).unwrap();
+        fs::write(dir.join("sub/inside.txt"), "inside").unwrap();
+        fs::write(dir.join("sun.txt"), "sun").unwrap();
+        let mut ed = editor_in(&dir, "");
+
+        ed.prompt_find_file();
+        ed.minibuffer.as_mut().unwrap().set_text("su");
+        ed.complete(true);
+        assert_eq!(ed.minibuffer_text().as_deref(), Some("su"));
+        ed.complete(true);
+        assert_eq!(ed.minibuffer_text().as_deref(), Some("sub/"));
+        ed.complete(true);
+        assert_eq!(ed.minibuffer_text().as_deref(), Some("sub/inside.txt"));
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn path_completion_cycles_candidates() {
+        let dir = temp_dir();
+        fs::write(dir.join("alpha.txt"), "a").unwrap();
+        fs::write(dir.join("alphabet.txt"), "b").unwrap();
+        let mut ed = editor_in(&dir, "");
+
+        ed.prompt_find_file();
+        ed.minibuffer.as_mut().unwrap().set_text("al");
+        ed.complete(true);
+        assert_eq!(ed.minibuffer_text().as_deref(), Some("alpha"));
+        ed.complete(true);
+        assert_eq!(ed.minibuffer_text().as_deref(), Some("alpha.txt"));
+        ed.complete(true);
+        assert_eq!(ed.minibuffer_text().as_deref(), Some("alphabet.txt"));
+        ed.complete(false);
+        assert_eq!(ed.minibuffer_text().as_deref(), Some("alpha.txt"));
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn editing_clears_a_completion_cycle() {
+        let mut ed = editor("");
+        ed.start_mx();
+        ed.minibuffer.as_mut().unwrap().set_text("save-bu");
+        ed.complete(true);
+        assert!(ed.minibuffer.as_ref().unwrap().completion.is_some());
+        ed.handle_key(Key::ch('x'));
+        let mb = ed.minibuffer.as_ref().unwrap();
+        assert!(mb.completion.is_none());
+        assert!(mb.hint.is_empty());
     }
 
     #[test]
@@ -1368,6 +1742,52 @@ mod tests {
         assert_eq!(ed.buffer_text(), "adef");
         ed.handle_key(Key::ctrl('y'));
         assert_eq!(ed.buffer_text(), "abcdef");
+    }
+
+    #[test]
+    fn copy_region_and_yank() {
+        let mut ed = editor("hello world");
+        ed.handle_key(Key::ctrl(' '));
+        for _ in 0..5 {
+            ed.handle_key(Key::ctrl('f'));
+        }
+        ed.handle_key(Key::alt('w'));
+        ed.handle_key(Key::alt('>'));
+        ed.handle_key(Key::ctrl('y'));
+        assert_eq!(ed.buffer_text(), "hello worldhello");
+    }
+
+    #[test]
+    fn delete_and_backspace_remove_an_active_region() {
+        let mut ed = editor("hello world");
+        ed.handle_key(Key::ctrl(' '));
+        for _ in 0..5 {
+            ed.handle_key(Key::ctrl('f'));
+        }
+        ed.handle_key(Key::code(KeyCode::Delete));
+        assert_eq!(ed.buffer_text(), " world");
+
+        let mut ed = editor("hello world");
+        ed.handle_key(Key::ctrl(' '));
+        for _ in 0..5 {
+            ed.handle_key(Key::ctrl('f'));
+        }
+        ed.handle_key(Key::code(KeyCode::Backspace));
+        assert_eq!(ed.buffer_text(), " world");
+    }
+
+    #[test]
+    fn region_commands_via_mx() {
+        let mut ed = editor("one two");
+        ed.run_mx("set-mark-command");
+        for _ in 0..3 {
+            ed.handle_key(Key::ctrl('f'));
+        }
+        ed.run_mx("kill-ring-save");
+        ed.run_mx("delete-region");
+        assert_eq!(ed.buffer_text(), " two");
+        ed.handle_key(Key::ctrl('y'));
+        assert_eq!(ed.buffer_text(), "one two");
     }
 
     #[test]
@@ -1466,5 +1886,94 @@ mod tests {
         ed.handle_key(Key::ch('a'));
         ed.handle_key(Key::code(KeyCode::Tab));
         assert_eq!(ed.buffer_text(), "a   ");
+    }
+
+    #[test]
+    fn auto_fill_breaks_at_a_word_boundary() {
+        let config = Config {
+            auto_fill: true,
+            fill_column: 10,
+            ..Config::default()
+        };
+        let mut ed = Editor::from_text("", None, config);
+        for c in "one two three four".chars() {
+            ed.handle_key(Key::ch(c));
+        }
+        assert_eq!(ed.buffer_text(), "one two\nthree four");
+        assert_eq!(ed.buffer.point, Point::new(1, 10));
+    }
+
+    #[test]
+    fn auto_fill_uses_display_columns_for_wide_text() {
+        let config = Config {
+            auto_fill: true,
+            fill_column: 8,
+            ..Config::default()
+        };
+        let mut ed = Editor::from_text("", None, config);
+        for c in "あああ あああ".chars() {
+            ed.handle_key(Key::ch(c));
+        }
+        assert_eq!(ed.buffer_text(), "あああ\nあああ");
+    }
+
+    #[test]
+    fn auto_fill_preserves_indentation() {
+        let config = Config {
+            auto_fill: true,
+            fill_column: 10,
+            ..Config::default()
+        };
+        let mut ed = Editor::from_text("", None, config);
+        for c in "    one two three".chars() {
+            ed.handle_key(Key::ch(c));
+        }
+        assert_eq!(ed.buffer_text(), "    one\n    two\n    three");
+    }
+
+    #[test]
+    fn auto_fill_does_nothing_when_disabled() {
+        let config = Config {
+            fill_column: 10,
+            ..Config::default()
+        };
+        assert!(!config.auto_fill);
+        let mut ed = Editor::from_text("", None, config);
+        for c in "one two three four".chars() {
+            ed.handle_key(Key::ch(c));
+        }
+        assert_eq!(ed.buffer_text(), "one two three four");
+    }
+
+    #[test]
+    fn undo_reverts_an_auto_fill_break() {
+        let config = Config {
+            auto_fill: true,
+            fill_column: 10,
+            ..Config::default()
+        };
+        let mut ed = Editor::from_text("one two th", None, config);
+        ed.buffer.point = Point::new(0, 10);
+        ed.handle_key(Key::ch('r'));
+        assert_eq!(ed.buffer_text(), "one two\nthr");
+        ed.handle_key(Key::ctrl('/'));
+        assert_eq!(ed.buffer_text(), "one two th");
+    }
+
+    #[test]
+    fn toggle_commands_flip_fill_and_truncate() {
+        let mut ed = editor("");
+        ed.run_mx("auto-fill-mode");
+        assert!(ed.config.auto_fill);
+        ed.run_mx("auto-fill-mode");
+        assert!(!ed.config.auto_fill);
+
+        ed.run_mx("toggle-truncate-lines");
+        assert!(!ed.config.truncate_lines);
+        assert!(!ed.view.truncate_lines);
+        assert_eq!(ed.view.left, 0);
+        ed.run_mx("toggle-truncate-lines");
+        assert!(ed.config.truncate_lines);
+        assert!(ed.view.truncate_lines);
     }
 }

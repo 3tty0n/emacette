@@ -199,6 +199,17 @@ fn convert_key(event: KeyEvent) -> Option<Key> {
     let alt = event.modifiers.contains(KeyModifiers::ALT);
     let shift = event.modifiers.contains(KeyModifiers::SHIFT);
     let code = match event.code {
+        crossterm::event::KeyCode::Char('\0') | crossterm::event::KeyCode::Null => {
+            // Ctrl-Space / Ctrl-@ arrive as NUL.  Some terminals omit the
+            // CONTROL modifier, so force it here rather than inserting a
+            // literal space.
+            return Some(Key {
+                code: KeyCode::Char(' '),
+                ctrl: true,
+                alt: false,
+                shift: false,
+            });
+        }
         crossterm::event::KeyCode::Char(c) => {
             let c = if ctrl && c.is_ascii_alphabetic() {
                 c.to_ascii_lowercase()
@@ -207,7 +218,6 @@ fn convert_key(event: KeyEvent) -> Option<Key> {
             };
             KeyCode::Char(c)
         }
-        crossterm::event::KeyCode::Null => KeyCode::Char(' '),
         crossterm::event::KeyCode::Enter => KeyCode::Enter,
         crossterm::event::KeyCode::Tab => KeyCode::Tab,
         crossterm::event::KeyCode::BackTab => KeyCode::BackTab,
