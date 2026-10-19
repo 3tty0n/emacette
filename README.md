@@ -30,25 +30,39 @@ numbers.
 
 ## Install
 
-Rust 1.74 or newer.
+Rust 1.74 or newer for source installs.
 
 ```sh
-cargo build --release
-install -Dm755 target/release/nemacs ~/.local/bin/nemacs
+cargo install --path .        # ~/.cargo/bin/nemacs
+make install                  # ~/.local/bin/nemacs
+make install PREFIX=/usr/local
 ```
 
-Alternatives:
+Prebuilt binaries are attached to GitHub Releases. `install.sh` detects the
+platform, verifies the SHA-256 checksum, and installs to
+`${PREFIX:-$HOME/.local}/bin`:
 
 ```sh
-cargo install --path .
-make install                 # PREFIX=/usr/local to override
+curl -fsSL https://raw.githubusercontent.com/3tty0n/nano-emacs/main/install.sh | sh
 ```
 
-`~/.local/bin` must be on `PATH`. To run without installing:
+From a checkout, or to pin a release:
 
 ```sh
-./target/release/nemacs README.md
+./install.sh                  # latest release
+./install.sh --release v0.1.0
+./install.sh --from-source    # build and install from this checkout
+./install.sh --uninstall      # remove the binary; config is kept
 ```
+
+The installer accepts Linux assets for static musl or glibc, and macOS
+universal or per-architecture assets. The URLs above assume the repository is
+`3tty0n/nano-emacs`; set `NEMACS_REPO=owner/repo` when the slug differs.
+Updates are installs: re-run the script, or run `cargo install --force`.
+`~/.local/bin` must be on `PATH`.
+
+`--uninstall` never removes `~/.config/nano-emacs`. For source installs,
+`cargo uninstall nano-emacs` and `make uninstall` remove the binary.
 
 ## Usage
 
@@ -167,10 +181,37 @@ and `SQUASH_MSG` open in GitCommit mode.
 
 ```sh
 cargo test        # unit and integration tests
-make smoke        # PTY end-to-end tests, including a real git commit
+make e2e          # PTY end-to-end tests, including a real git commit
 make bench        # startup comparison
 make check        # rustfmt check and tests
 ```
+
+## Releasing
+
+Releases are built and published manually.
+
+```sh
+./scripts/release.sh                    # host target, version from Cargo.toml
+./scripts/release.sh --target x86_64-unknown-linux-musl
+./scripts/release.sh --version 0.2.0 --output dist
+```
+
+The script writes `dist/nemacs-v<version>-<target>.tar.gz` and a `.sha256`
+file. It does not tag or upload. Publish the files with the GitHub CLI or the
+web UI:
+
+```sh
+git tag v0.1.0
+git push origin v0.1.0
+gh release create v0.1.0 \
+  dist/nemacs-v0.1.0-*.tar.gz dist/nemacs-v0.1.0-*.tar.gz.sha256 \
+  --generate-notes
+```
+
+`make release ARGS="--target x86_64-unknown-linux-musl"` is equivalent to the
+script. Build additional targets on their native platform, or install `cross`
+to cross-compile. The script does not produce macOS universal binaries; build
+`aarch64-apple-darwin` or `x86_64-apple-darwin` per machine.
 
 ## License
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""End-to-end smoke tests driven through a real pseudo-terminal.
+"""End-to-end tests driven through a real pseudo-terminal.
 
-Run with:  make smoke   (or: python3 scripts/smoke.py [path-to-binary])
+Run with:  make e2e   (or: python3 scripts/e2e.py [path-to-binary])
 """
 
 import os
@@ -32,7 +32,7 @@ def check(name, condition, detail=""):
 
 
 def tmpfile(text, name="note.txt"):
-    directory = tempfile.mkdtemp(prefix="nano-emacs-smoke-")
+    directory = tempfile.mkdtemp(prefix="nano-emacs-e2e-")
     path = os.path.join(directory, name)
     with open(path, "w", encoding="utf-8") as handle:
         handle.write(text)
@@ -160,7 +160,7 @@ def test_git_commit():
         subprocess.run(["git", "-C", repo, "add", "hello.txt"], check=True)
         code, out, _ = run(
             ["git", "-C", repo, "-c", f"core.editor={BIN}", "commit"],
-            [b"smoke: commit message\n", b"\x03\x03"],
+            [b"e2e: commit message\n", b"\x03\x03"],
             cols=COLS,
             rows=ROWS,
             settle=0.6,
@@ -175,7 +175,7 @@ def test_git_commit():
         subject = log.stdout.strip()
         check("git commit runs the editor", b"COMMIT_EDITMSG" in out)
         check("git commit succeeds", code == 0, f"exit={code} git-log={log.stderr!r}")
-        check("commit message is recorded", subject == "smoke: commit message", repr(subject))
+        check("commit message is recorded", subject == "e2e: commit message", repr(subject))
         check("git template comments are shown", b"# Please enter the commit message" in out)
     finally:
         shutil.rmtree(repo, ignore_errors=True)
@@ -306,7 +306,7 @@ def main():
     if failures:
         print(f"{len(failures)} test(s) failed: {', '.join(failures)}")
         return 1
-    print("all smoke tests passed")
+    print("all e2e tests passed")
     return 0
 
 

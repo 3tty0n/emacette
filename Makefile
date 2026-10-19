@@ -4,7 +4,7 @@ CARGO ?= cargo
 PYTHON ?= python3
 BIN := target/release/nemacs
 
-.PHONY: all build test check fmt smoke bench install uninstall clean
+.PHONY: all build test check fmt e2e bench install uninstall clean release
 
 all: build
 
@@ -21,14 +21,18 @@ check:
 	$(CARGO) fmt -- --check
 	$(CARGO) test
 
-smoke: build
-	$(PYTHON) scripts/smoke.py $(BIN)
+e2e: build
+	$(PYTHON) scripts/e2e.py $(BIN)
 
 bench: build
 	$(PYTHON) scripts/bench.py $(BIN)
 
+release:
+	./scripts/release.sh $(ARGS)
+
 install: build
-	install -Dm755 $(BIN) $(DESTDIR)$(BINDIR)/nemacs
+	mkdir -p $(DESTDIR)$(BINDIR)
+	install -m 755 $(BIN) $(DESTDIR)$(BINDIR)/nemacs
 
 uninstall:
 	rm -f $(DESTDIR)$(BINDIR)/nemacs

@@ -1,6 +1,6 @@
 """Reconstruct a text screen from the ANSI output of a PTY session.
 
-Used by `make smoke` to make the end-to-end test failures readable.
+Used by `make e2e` to make the end-to-end test failures readable.
 """
 
 import re

@@ -1,4 +1,4 @@
-"""Tiny PTY harness used by the smoke tests and the benchmark.
+"""Tiny PTY harness used by the e2e tests and the benchmark.
 
 The functions here spawn a program on a pseudo-terminal of a known size,
 feed it bytes and collect the output.  Nothing in this module is imported
