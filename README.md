@@ -6,8 +6,8 @@ viewing, and small edits. The binary is `nemacs`.
 - Single Rust binary. Direct dependencies: `crossterm`, `unicode-width`.
 - Emacs key bindings, minibuffer, mark, kill ring, undo.
 - Incremental rendering: only changed rows reach the terminal.
-- Syntax highlighting for 17 languages and formats, detected by extension or
-  shebang.
+- Syntax highlighting for 39 languages and formats, detected by file name,
+  extension, or shebang.
 - CJK/full-width text, tabs, horizontal scrolling, line numbers.
 - Git commit mode: `C-c C-c` saves and exits, `C-c C-k` aborts with exit code 1.
 - UTF-8 input; CRLF line endings are preserved.
@@ -163,10 +163,19 @@ confirm_on_quit = true
 
 ## Languages
 
-Rust, Go, C, C++, Python, JavaScript, TypeScript, Shell, Markdown, JSON, TOML,
-YAML, Makefile, HTML, CSS, Diff, and Git commit messages. Detection uses the
-file extension, then the shebang. `COMMIT_EDITMSG`, `MERGE_MSG`, `TAG_EDITMSG`,
-and `SQUASH_MSG` open in GitCommit mode.
+- Systems: Rust, Go, C, C++, Zig, Swift, Java, Kotlin, Dart.
+- Scripting and queries: Python, JavaScript, TypeScript, Ruby, PHP, Lua, Shell,
+  Elixir, Haskell, SQL.
+- Markup and prose: Markdown, LaTeX, reStructuredText, AsciiDoc, HTML, CSS, Vue,
+  Svelte.
+- Data and configuration: JSON, TOML, YAML, INI/.env, HCL/Terraform, Nix, CMake,
+  Dockerfile, Makefile, Protobuf.
+- Diff and Git commit messages.
+
+Detection uses the file name (for example `Dockerfile`, `CMakeLists.txt`,
+`Gemfile`, `.bashrc`, `.env`), then the extension, then the shebang.
+`COMMIT_EDITMSG`, `MERGE_MSG`, `TAG_EDITMSG`, and `SQUASH_MSG` open in GitCommit
+mode.
 
 ## Limitations
 
