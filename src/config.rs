@@ -4,12 +4,57 @@
 //! `$NANO_EMACS_CONFIG`, `$XDG_CONFIG_HOME/nano-emacs/config`, or
 //! `~/.config/nano-emacs/config`. Unknown keys are ignored, so the file can
 //! grow without breaking older builds.
+//!
+//! Values outside a section are the defaults for every language. A section
+//! such as `[rust]` overrides only that language.
 
+use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::path::PathBuf;
 
+use crate::syntax::Lang;
 use crate::theme::ThemeName;
+
+/// Per-language overrides. `None` means "inherit the global value".
+#[derive(Clone, Debug, Default)]
+pub struct LanguageConfig {
+    pub tab_width: Option<usize>,
+    pub line_numbers: Option<bool>,
+    pub highlight_trailing_ws: Option<bool>,
+    pub auto_indent: Option<bool>,
+    pub auto_fill: Option<bool>,
+    pub fill_column: Option<usize>,
+    pub truncate_lines: Option<bool>,
+    pub editor_completion: Option<bool>,
+    pub spell_check: Option<bool>,
+    pub spell_dictionary: Option<String>,
+    pub comment_start: Option<String>,
+    pub diagnostics_inline: Option<bool>,
+    pub diagnostics_popup: Option<bool>,
+    pub lsp_command: Option<String>,
+    pub lsp_language_id: Option<String>,
+}
+
+/// Fully resolved settings for the current language.
+#[derive(Clone, Debug)]
+pub struct Settings {
+    pub tab_width: usize,
+    pub line_numbers: bool,
+    pub highlight_trailing_ws: bool,
+    pub auto_indent: bool,
+    pub auto_fill: bool,
+    pub fill_column: usize,
+    pub truncate_lines: bool,
+    pub editor_completion: bool,
+    pub spell_check: bool,
+    pub spell_dictionary: Option<String>,
+    pub comment_start: String,
+    pub diagnostics_inline: bool,
+    pub diagnostics_popup: bool,
+    pub lsp_command: Option<String>,
+    pub lsp_language_id: Option<String>,
+}
 
 #[derive(Clone, Debug)]
 pub struct Config {
@@ -29,6 +74,17 @@ pub struct Config {
     pub spell_check: bool,
     /// Optional path to a word list or hunspell `.dic` file.
     pub spell_dictionary: Option<String>,
+    /// Global line-comment prefix. When unset, use the language default.
+    pub comment_start: Option<String>,
+    /// Highlight LSP diagnostics inline.
+    pub diagnostics_inline: bool,
+    /// Show LSP diagnostics for the current line in a popup.
+    pub diagnostics_popup: bool,
+    /// Default LSP command line; sections can override or disable it.
+    pub lsp_command: Option<String>,
+    /// Default LSP `languageId`; sections can override it.
+    pub lsp_language_id: Option<String>,
+    pub languages: HashMap<String, LanguageConfig>,
     pub theme: ThemeName,
     /// Comment character used by git's commit message template.
     pub comment_char: char,
@@ -48,6 +104,12 @@ impl Default for Config {
             editor_completion: false,
             spell_check: false,
             spell_dictionary: None,
+            comment_start: None,
+            diagnostics_inline: true,
+            diagnostics_popup: true,
+            lsp_command: None,
+            lsp_language_id: None,
+            languages: HashMap::new(),
             theme: ThemeName::Dark,
             comment_char: '#',
             confirm_on_quit: true,
@@ -67,85 +129,30 @@ impl Config {
     }
 
     pub fn parse(&mut self, text: &str) {
-        for line in text.lines() {
-            let line = line.trim();
+        let mut section: Option<String> = None;
+        for raw in text.lines() {
+            let line = raw.trim();
             if line.is_empty() || line.starts_with('#') {
                 continue;
+            }
+            if line.starts_with('[') {
+                if let Some(end) = line.find(']') {
+                    let name = normalize_section(&line[1..end]);
+                    section = if name.is_empty() { None } else { Some(name) };
+                    continue;
+                }
             }
             let Some((key, value)) = line.split_once('=') else {
                 continue;
             };
             let key = key.trim().to_ascii_lowercase();
-            let value = strip_comment(value).trim_matches('"').trim_matches('\'');
-            match key.as_str() {
-                "tab_width" | "tab-width" => {
-                    if let Ok(n) = value.parse::<usize>() {
-                        self.tab_width = n.clamp(1, 16);
-                    }
+            let value = unquote(strip_comment(value));
+            match section.as_deref() {
+                Some(name) => {
+                    let language = self.languages.entry(name.to_string()).or_default();
+                    apply_language_key(language, &key, value);
                 }
-                "line_numbers" | "line-numbers" => {
-                    if let Some(b) = parse_bool(value) {
-                        self.line_numbers = b;
-                    }
-                }
-                "highlight_trailing_whitespace" | "highlight-trailing-whitespace" => {
-                    if let Some(b) = parse_bool(value) {
-                        self.highlight_trailing_ws = b;
-                    }
-                }
-                "auto_indent" | "auto-indent" => {
-                    if let Some(b) = parse_bool(value) {
-                        self.auto_indent = b;
-                    }
-                }
-                "auto_fill" | "auto-fill" | "auto_fill_mode" | "auto-fill-mode" => {
-                    if let Some(b) = parse_bool(value) {
-                        self.auto_fill = b;
-                    }
-                }
-                "fill_column" | "fill-column" => {
-                    if let Ok(n) = value.parse::<usize>() {
-                        self.fill_column = n.clamp(1, 1000);
-                    }
-                }
-                "truncate_lines" | "truncate-lines" | "truncate" => {
-                    if let Some(b) = parse_bool(value) {
-                        self.truncate_lines = b;
-                    }
-                }
-                "editor_completion" | "editor-completion" | "completion_in_editor" => {
-                    if let Some(b) = parse_bool(value) {
-                        self.editor_completion = b;
-                    }
-                }
-                "spell_check" | "spell-check" | "spellcheck" => {
-                    if let Some(b) = parse_bool(value) {
-                        self.spell_check = b;
-                    }
-                }
-                "spell_dictionary" | "spell-dictionary" => {
-                    if value.is_empty() {
-                        self.spell_dictionary = None;
-                    } else {
-                        self.spell_dictionary = Some(value.to_string());
-                    }
-                }
-                "confirm_on_quit" | "confirm-on-quit" => {
-                    if let Some(b) = parse_bool(value) {
-                        self.confirm_on_quit = b;
-                    }
-                }
-                "theme" => {
-                    if let Some(theme) = ThemeName::parse(value) {
-                        self.theme = theme;
-                    }
-                }
-                "comment_char" | "comment-char" => {
-                    if let Some(c) = value.chars().next() {
-                        self.comment_char = c;
-                    }
-                }
-                _ => {}
+                None => apply_global_key(self, &key, value),
             }
         }
     }
@@ -153,6 +160,243 @@ impl Config {
     pub fn config_path() -> Option<PathBuf> {
         config_path()
     }
+
+    /// Merge global defaults with the section for `lang`.
+    pub fn settings_for(&self, lang: Lang) -> Settings {
+        let overrides = self.language_config(lang);
+        let pick_bool = |get: fn(&LanguageConfig) -> Option<bool>, default: bool| {
+            overrides.and_then(get).unwrap_or(default)
+        };
+        let pick_usize = |get: fn(&LanguageConfig) -> Option<usize>, default: usize| {
+            overrides.and_then(get).unwrap_or(default)
+        };
+        let comment_start = overrides
+            .and_then(|config| config.comment_start.clone())
+            .or_else(|| self.comment_start.clone())
+            .unwrap_or_else(|| match lang {
+                Lang::GitCommit => self.comment_char.to_string(),
+                _ => lang.default_comment_start().to_string(),
+            });
+        Settings {
+            tab_width: pick_usize(|config| config.tab_width, self.tab_width),
+            line_numbers: pick_bool(|config| config.line_numbers, self.line_numbers),
+            highlight_trailing_ws: pick_bool(
+                |config| config.highlight_trailing_ws,
+                self.highlight_trailing_ws,
+            ),
+            auto_indent: pick_bool(|config| config.auto_indent, self.auto_indent),
+            auto_fill: pick_bool(|config| config.auto_fill, self.auto_fill),
+            fill_column: pick_usize(|config| config.fill_column, self.fill_column),
+            truncate_lines: pick_bool(|config| config.truncate_lines, self.truncate_lines),
+            editor_completion: pick_bool(|config| config.editor_completion, self.editor_completion),
+            spell_check: pick_bool(|config| config.spell_check, self.spell_check),
+            spell_dictionary: overrides
+                .and_then(|config| config.spell_dictionary.clone())
+                .or_else(|| self.spell_dictionary.clone()),
+            comment_start,
+            diagnostics_inline: pick_bool(
+                |config| config.diagnostics_inline,
+                self.diagnostics_inline,
+            ),
+            diagnostics_popup: pick_bool(|config| config.diagnostics_popup, self.diagnostics_popup),
+            lsp_command: overrides
+                .and_then(|config| config.lsp_command.clone())
+                .or_else(|| self.lsp_command.clone()),
+            lsp_language_id: overrides
+                .and_then(|config| config.lsp_language_id.clone())
+                .or_else(|| self.lsp_language_id.clone()),
+        }
+    }
+
+    fn language_config(&self, lang: Lang) -> Option<&LanguageConfig> {
+        let keys = [lang.config_key(), lang.name()];
+        keys.iter()
+            .map(|key| normalize_section(key))
+            .chain(
+                lang.config_aliases()
+                    .iter()
+                    .map(|key| normalize_section(key)),
+            )
+            .find_map(|key| self.languages.get(&key))
+    }
+}
+
+fn apply_global_key(config: &mut Config, key: &str, value: &str) {
+    match key {
+        "tab_width" | "tab-width" => {
+            if let Ok(n) = value.parse::<usize>() {
+                config.tab_width = n.clamp(1, 16);
+            }
+        }
+        "line_numbers" | "line-numbers" => {
+            if let Some(b) = parse_bool(value) {
+                config.line_numbers = b;
+            }
+        }
+        "highlight_trailing_whitespace" | "highlight-trailing-whitespace" => {
+            if let Some(b) = parse_bool(value) {
+                config.highlight_trailing_ws = b;
+            }
+        }
+        "auto_indent" | "auto-indent" => {
+            if let Some(b) = parse_bool(value) {
+                config.auto_indent = b;
+            }
+        }
+        "auto_fill" | "auto-fill" | "auto_fill_mode" | "auto-fill-mode" => {
+            if let Some(b) = parse_bool(value) {
+                config.auto_fill = b;
+            }
+        }
+        "fill_column" | "fill-column" => {
+            if let Ok(n) = value.parse::<usize>() {
+                config.fill_column = n.clamp(1, 1000);
+            }
+        }
+        "truncate_lines" | "truncate-lines" | "truncate" => {
+            if let Some(b) = parse_bool(value) {
+                config.truncate_lines = b;
+            }
+        }
+        "editor_completion" | "editor-completion" | "completion_in_editor" => {
+            if let Some(b) = parse_bool(value) {
+                config.editor_completion = b;
+            }
+        }
+        "spell_check" | "spell-check" | "spellcheck" => {
+            if let Some(b) = parse_bool(value) {
+                config.spell_check = b;
+            }
+        }
+        "spell_dictionary" | "spell-dictionary" => {
+            config.spell_dictionary = nonempty(value);
+        }
+        "comment_start" | "comment-start" => {
+            config.comment_start = Some(value.to_string());
+        }
+        "comment_char" | "comment-char" => {
+            if let Some(c) = value.chars().next() {
+                config.comment_char = c;
+            }
+        }
+        "diagnostics_inline" | "diagnostics-inline" => {
+            if let Some(b) = parse_bool(value) {
+                config.diagnostics_inline = b;
+            }
+        }
+        "diagnostics_popup" | "diagnostics-popup" => {
+            if let Some(b) = parse_bool(value) {
+                config.diagnostics_popup = b;
+            }
+        }
+        "lsp_command" | "lsp-command" => {
+            config.lsp_command = command(value);
+        }
+        "lsp_language_id" | "lsp-language-id" => {
+            config.lsp_language_id = nonempty(value);
+        }
+        "confirm_on_quit" | "confirm-on-quit" => {
+            if let Some(b) = parse_bool(value) {
+                config.confirm_on_quit = b;
+            }
+        }
+        "theme" => {
+            if let Some(theme) = ThemeName::parse(value) {
+                config.theme = theme;
+            }
+        }
+        _ => {}
+    }
+}
+
+fn apply_language_key(config: &mut LanguageConfig, key: &str, value: &str) {
+    match key {
+        "tab_width" | "tab-width" => {
+            if let Ok(n) = value.parse::<usize>() {
+                config.tab_width = Some(n.clamp(1, 16));
+            }
+        }
+        "line_numbers" | "line-numbers" => {
+            if let Some(b) = parse_bool(value) {
+                config.line_numbers = Some(b);
+            }
+        }
+        "highlight_trailing_whitespace" | "highlight-trailing-whitespace" => {
+            if let Some(b) = parse_bool(value) {
+                config.highlight_trailing_ws = Some(b);
+            }
+        }
+        "auto_indent" | "auto-indent" => {
+            if let Some(b) = parse_bool(value) {
+                config.auto_indent = Some(b);
+            }
+        }
+        "auto_fill" | "auto-fill" | "auto_fill_mode" | "auto-fill-mode" => {
+            if let Some(b) = parse_bool(value) {
+                config.auto_fill = Some(b);
+            }
+        }
+        "fill_column" | "fill-column" => {
+            if let Ok(n) = value.parse::<usize>() {
+                config.fill_column = Some(n.clamp(1, 1000));
+            }
+        }
+        "truncate_lines" | "truncate-lines" | "truncate" => {
+            if let Some(b) = parse_bool(value) {
+                config.truncate_lines = Some(b);
+            }
+        }
+        "editor_completion" | "editor-completion" | "completion_in_editor" => {
+            if let Some(b) = parse_bool(value) {
+                config.editor_completion = Some(b);
+            }
+        }
+        "spell_check" | "spell-check" | "spellcheck" => {
+            if let Some(b) = parse_bool(value) {
+                config.spell_check = Some(b);
+            }
+        }
+        "spell_dictionary" | "spell-dictionary" => {
+            config.spell_dictionary = Some(value.to_string());
+        }
+        "comment_start" | "comment-start" | "comment_char" | "comment-char" => {
+            config.comment_start = Some(value.to_string());
+        }
+        "diagnostics_inline" | "diagnostics-inline" => {
+            if let Some(b) = parse_bool(value) {
+                config.diagnostics_inline = Some(b);
+            }
+        }
+        "diagnostics_popup" | "diagnostics-popup" => {
+            if let Some(b) = parse_bool(value) {
+                config.diagnostics_popup = Some(b);
+            }
+        }
+        "lsp_command" | "lsp-command" => {
+            config.lsp_command = Some(command(value).unwrap_or_default());
+        }
+        "lsp_language_id" | "lsp-language-id" => {
+            config.lsp_language_id = Some(value.to_string());
+        }
+        _ => {}
+    }
+}
+
+fn unquote(value: &str) -> &str {
+    let value = value.trim();
+    if let Some(inner) = value
+        .strip_prefix('"')
+        .and_then(|rest| rest.strip_suffix('"'))
+    {
+        return inner;
+    }
+    if let Some(inner) = value
+        .strip_prefix('\'')
+        .and_then(|rest| rest.strip_suffix('\''))
+    {
+        return inner;
+    }
+    value
 }
 
 fn parse_bool(value: &str) -> Option<bool> {
@@ -160,6 +404,23 @@ fn parse_bool(value: &str) -> Option<bool> {
         "1" | "true" | "yes" | "on" => Some(true),
         "0" | "false" | "no" | "off" => Some(false),
         _ => None,
+    }
+}
+
+fn nonempty(value: &str) -> Option<String> {
+    if value.is_empty() {
+        None
+    } else {
+        Some(value.to_string())
+    }
+}
+
+fn command(value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty() || value.eq_ignore_ascii_case("off") || value.eq_ignore_ascii_case("none") {
+        None
+    } else {
+        Some(value.to_string())
     }
 }
 
@@ -183,6 +444,14 @@ fn strip_comment(value: &str) -> &str {
         previous = c;
     }
     value.trim()
+}
+
+fn normalize_section(name: &str) -> String {
+    name.trim()
+        .to_ascii_lowercase()
+        .chars()
+        .filter(|c| !c.is_whitespace() && *c != '-' && *c != '_')
+        .collect()
 }
 
 fn config_path() -> Option<PathBuf> {
@@ -240,6 +509,64 @@ mod tests {
         assert!(config.spell_check);
         assert_eq!(config.spell_dictionary.as_deref(), Some("/tmp/words"));
         assert_eq!(config.comment_char, ';');
+    }
+
+    #[test]
+    fn parses_per_language_sections() {
+        let mut config = Config::default();
+        config.parse(
+            r##"
+            tab_width = 8
+            diagnostics_popup = false
+            [rust]
+            tab_width = 2
+            comment_start = //
+            lsp_command = rust-analyzer
+            [markdown]
+            spell_check = true
+            diagnostics_inline = false
+            [git-commit]
+            comment_start = "#"
+            "##,
+        );
+        let rust = config.settings_for(Lang::Rust);
+        assert_eq!(rust.tab_width, 2);
+        assert_eq!(rust.comment_start, "//");
+        assert_eq!(rust.lsp_command.as_deref(), Some("rust-analyzer"));
+        assert!(!rust.diagnostics_popup);
+
+        let markdown = config.settings_for(Lang::Markdown);
+        assert_eq!(markdown.tab_width, 8);
+        assert!(markdown.spell_check);
+        assert!(!markdown.diagnostics_inline);
+
+        let commit = config.settings_for(Lang::GitCommit);
+        assert_eq!(commit.comment_start, "#");
+        assert_eq!(config.settings_for(Lang::Latex).comment_start, "%");
+        assert_eq!(config.settings_for(Lang::Rust).comment_start, "//");
+    }
+
+    #[test]
+    fn language_sections_can_disable_an_inherited_lsp_command() {
+        let mut config = Config::default();
+        config.parse("lsp_command = global-server\n[python]\nlsp_command = off\n");
+        let python = config.settings_for(Lang::Python);
+        assert_eq!(python.lsp_command.as_deref(), Some(""));
+        assert_eq!(
+            config.settings_for(Lang::Rust).lsp_command.as_deref(),
+            Some("global-server")
+        );
+    }
+
+    #[test]
+    fn keeps_quotes_inside_a_command_line() {
+        let mut config = Config::default();
+        config.parse("[rust]\nlsp_command = python3 \"/tmp/a b/server.py\" --stdio\n");
+        let settings = config.settings_for(Lang::Rust);
+        assert_eq!(
+            settings.lsp_command.as_deref(),
+            Some("python3 \"/tmp/a b/server.py\" --stdio")
+        );
     }
 
     #[test]

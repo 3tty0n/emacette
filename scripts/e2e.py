@@ -153,7 +153,6 @@ def test_find_file_tab_completion():
             b"al",
             b"\t",
             b"\t",
-            b"\t",
             b"\r",
             b"\x18\x03",
         ],
@@ -172,6 +171,146 @@ def test_find_file_tab_completion():
         b"alpha.txt" in out and b"alphabet.txt" in out,
         repr(out[-400:]),
     )
+
+
+def test_minibuffer_menus_open_immediately():
+    directory = tempfile.mkdtemp(prefix="nano-emacs-e2e-")
+    path = os.path.join(directory, "note.txt")
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write("note\n")
+    with open(os.path.join(directory, "zzz-immediate-candidate.txt"), "w", encoding="utf-8") as handle:
+        handle.write("candidate\n")
+    previous = os.getcwd()
+    os.chdir(directory)
+    try:
+        code, out, _ = run(
+            [BIN, path],
+            [b"\x1bx", b"\x07", b"\x18\x06", b"\x07", b"\x18\x03"],
+            cols=COLS,
+            rows=ROWS,
+            expect=b"nemacs",
+            key_delay=0.15,
+        )
+    finally:
+        os.chdir(previous)
+    check(
+        "M-x and find-file list candidates immediately",
+        code == 0
+        and b"save-buffers-kill-terminal" in out
+        and b"zzz-immediate-candidate.txt" in out,
+        f"mx={b'save-buffers-kill-terminal' in out} file={b'zzz-immediate-candidate.txt' in out}",
+    )
+
+
+def test_minibuffer_completion_ctrl_n():
+    directory = tempfile.mkdtemp(prefix="nano-emacs-e2e-")
+    start = os.path.join(directory, "note.txt")
+    with open(start, "w", encoding="utf-8") as handle:
+        handle.write("start\n")
+    for name, content in (("alpha.txt", "alpha-content\n"), ("alphabet.txt", "alphabet-content\n")):
+        with open(os.path.join(directory, name), "w", encoding="utf-8") as handle:
+            handle.write(content)
+    code, out, _ = run(
+        [BIN, start],
+        [
+            b"\x18\x06",  # C-x C-f
+            b"\x01\x0b",  # clear prompt
+            b"al",
+            b"\x0e",      # C-n: select the first candidate
+            b"\r",
+            b"\x18\x03",
+        ],
+        cols=COLS,
+        rows=ROWS,
+        expect=b"nemacs",
+    )
+    screen = body_screen(out)
+    check(
+        "minibuffer C-n selects a candidate",
+        code == 0 and "alpha-content" in screen,
+        repr(screen[-300:]),
+    )
+
+
+def test_lsp_diagnostics_and_completion():
+    # Keep the fake server inside the workspace: some sandboxes give child
+    # processes a different /tmp view, which would hide the script.
+    target = os.path.join(ROOT, "target")
+    os.makedirs(target, exist_ok=True)
+    directory = tempfile.mkdtemp(prefix="nano-emacs-e2e-lsp-", dir=target)
+    server = os.path.join(directory, "fake_lsp.py")
+    with open(server, "w", encoding="utf-8") as handle:
+        handle.write(
+            """import json, sys
+
+def send(obj):
+    body = json.dumps(obj).encode()
+    sys.stdout.buffer.write(b"Content-Length: " + str(len(body)).encode() + b"\\r\\n\\r\\n" + body)
+    sys.stdout.buffer.flush()
+
+while True:
+    headers = {}
+    while True:
+        line = sys.stdin.buffer.readline()
+        if not line:
+            sys.exit(0)
+        if line in (b"\\r\\n", b"\\n"):
+            break
+        if b":" in line:
+            key, value = line.decode().split(":", 1)
+            headers[key.strip().lower()] = value.strip()
+    body = sys.stdin.buffer.read(int(headers.get("content-length", "0")))
+    if not body:
+        sys.exit(0)
+    message = json.loads(body)
+    if message.get("method") == "initialize" and "id" in message:
+        send({"jsonrpc": "2.0", "id": message["id"], "result": {"capabilities": {"completionProvider": {}, "textDocumentSync": 1}}})
+    elif message.get("method") == "textDocument/didOpen":
+        uri = message["params"]["textDocument"]["uri"]
+        send({"jsonrpc": "2.0", "method": "textDocument/publishDiagnostics", "params": {"uri": uri, "diagnostics": [{"range": {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 5}}, "severity": 1, "message": "fake error", "source": "fake"}]}})
+    elif message.get("method") == "textDocument/completion" and "id" in message:
+        send({"jsonrpc": "2.0", "id": message["id"], "result": {"items": [{"label": "alpha", "insertText": "alpha"}, {"label": "alphabet", "insertText": "alphabet"}]}})
+"""
+        )
+    config = os.path.join(directory, "config")
+    with open(config, "w", encoding="utf-8") as handle:
+        handle.write(
+            "[plain]\n"
+            "editor_completion = true\n"
+            f"lsp_command = python3 {server}\n"
+            "lsp_language_id = plaintext\n"
+        )
+    path = os.path.join(directory, "lsp.txt")
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write("hello wurld\n")
+    previous = os.environ.get("NANO_EMACS_CONFIG")
+    os.environ["NANO_EMACS_CONFIG"] = config
+    try:
+        code, out, _ = run(
+            [BIN, path],
+            [b"\x05", b"al", b"\x18\x13", b"\x18\x03"],
+            cols=COLS,
+            rows=ROWS,
+            expect=b"nemacs",
+            key_delay=0.5,
+        )
+    finally:
+        if previous is None:
+            os.environ.pop("NANO_EMACS_CONFIG", None)
+        else:
+            os.environ["NANO_EMACS_CONFIG"] = previous
+    with open(path, encoding="utf-8") as handle:
+        content = handle.read()
+    check(
+        "LSP diagnostics and completion render",
+        code == 0
+        and content == "hello wurldal\n"
+        and b";4;38;5;203" in out
+        and b"E: fake error" in out
+        and b"> alpha" in out,
+        f"content={content!r} diag={b'E: fake error' in out} menu={b'> alpha' in out}",
+    )
+    shutil.rmtree(directory, ignore_errors=True)
 
 
 def test_editor_completion_menu():
@@ -242,6 +381,42 @@ def test_spell_check():
         and b"Replace 'wurld' with: " in out,
         repr(content),
     )
+
+
+def test_quit_without_changes_is_immediate():
+    directory = tempfile.mkdtemp(prefix="nano-emacs-e2e-")
+    path = os.path.join(directory, "note.txt")
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write("hello\n")
+    code, out, _ = run(
+        [BIN, path],
+        [b"X", b"\x1f", b"\x18\x03"],
+        cols=COLS,
+        rows=ROWS,
+        expect=b"nemacs",
+    )
+    with open(path, encoding="utf-8") as handle:
+        content = handle.read()
+    check(
+        "quit after undoing all changes is immediate",
+        code == 0 and content == "hello\n" and b"Save changes" not in out,
+        repr(out[-300:]),
+    )
+
+    new_path = os.path.join(directory, "new.txt")
+    code, out, _ = run(
+        [BIN, new_path],
+        [b"x", b"\x7f", b"\x18\x03"],
+        cols=COLS,
+        rows=ROWS,
+        expect=b"nemacs",
+    )
+    check(
+        "empty new file quits without prompting",
+        code == 0 and not os.path.exists(new_path) and b"Save this buffer" not in out,
+        repr(out[-300:]),
+    )
+    shutil.rmtree(directory, ignore_errors=True)
 
 
 def test_escape_meta_word_motion():
@@ -436,8 +611,12 @@ def main():
     test_mark_and_kill_region()
     test_region_delete_and_copy()
     test_find_file_tab_completion()
+    test_minibuffer_menus_open_immediately()
+    test_minibuffer_completion_ctrl_n()
+    test_lsp_diagnostics_and_completion()
     test_editor_completion_menu()
     test_spell_check()
+    test_quit_without_changes_is_immediate()
     test_escape_meta_word_motion()
     test_search_and_insert()
     test_help_overlay()

@@ -7,6 +7,7 @@ pub mod editor;
 pub mod help;
 pub mod highlight;
 pub mod key;
+pub mod lsp;
 pub mod minibuffer;
 pub mod render;
 pub mod search;

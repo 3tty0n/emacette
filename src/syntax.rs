@@ -97,6 +97,160 @@ impl Lang {
         }
     }
 
+    /// Stable key used for per-language configuration sections.
+    pub fn config_key(self) -> &'static str {
+        match self {
+            Lang::Plain => "plain",
+            Lang::Rust => "rust",
+            Lang::Go => "go",
+            Lang::C => "c",
+            Lang::Cpp => "cpp",
+            Lang::Java => "java",
+            Lang::Kotlin => "kotlin",
+            Lang::Swift => "swift",
+            Lang::Zig => "zig",
+            Lang::Dart => "dart",
+            Lang::Python => "python",
+            Lang::JavaScript => "javascript",
+            Lang::TypeScript => "typescript",
+            Lang::Ruby => "ruby",
+            Lang::Php => "php",
+            Lang::Lua => "lua",
+            Lang::Haskell => "haskell",
+            Lang::Elixir => "elixir",
+            Lang::Sql => "sql",
+            Lang::Shell => "shell",
+            Lang::Markdown => "markdown",
+            Lang::Latex => "latex",
+            Lang::Rst => "rst",
+            Lang::AsciiDoc => "asciidoc",
+            Lang::Json => "json",
+            Lang::Toml => "toml",
+            Lang::Yaml => "yaml",
+            Lang::Ini => "ini",
+            Lang::Hcl => "hcl",
+            Lang::Nix => "nix",
+            Lang::Cmake => "cmake",
+            Lang::Dockerfile => "dockerfile",
+            Lang::Makefile => "makefile",
+            Lang::Protobuf => "protobuf",
+            Lang::Html => "html",
+            Lang::Css => "css",
+            Lang::Vue => "vue",
+            Lang::Svelte => "svelte",
+            Lang::Diff => "diff",
+            Lang::GitCommit => "gitcommit",
+        }
+    }
+
+    /// Common aliases accepted as configuration section names.
+    pub fn config_aliases(self) -> &'static [&'static str] {
+        match self {
+            Lang::Plain => &["plain", "plaintext", "text"],
+            Lang::Cpp => &["cpp", "c++"],
+            Lang::JavaScript => &["javascript", "js"],
+            Lang::TypeScript => &["typescript", "ts"],
+            Lang::Markdown => &["markdown", "md"],
+            Lang::Latex => &["latex", "tex"],
+            Lang::Rst => &["rst", "rest", "restructuredtext"],
+            Lang::AsciiDoc => &["asciidoc", "adoc"],
+            Lang::Shell => &["shell", "sh"],
+            Lang::GitCommit => &["gitcommit", "git"],
+            Lang::Hcl => &["hcl", "terraform"],
+            Lang::Protobuf => &["protobuf", "proto"],
+            _ => &[],
+        }
+    }
+
+    /// Default line-comment prefix for `M-;` and similar features.
+    pub fn default_comment_start(self) -> &'static str {
+        match self {
+            Lang::Plain
+            | Lang::Markdown
+            | Lang::Json
+            | Lang::Html
+            | Lang::Css
+            | Lang::Vue
+            | Lang::Svelte
+            | Lang::Diff => "",
+            Lang::Rust
+            | Lang::Go
+            | Lang::C
+            | Lang::Cpp
+            | Lang::Java
+            | Lang::Kotlin
+            | Lang::Swift
+            | Lang::Zig
+            | Lang::Dart
+            | Lang::JavaScript
+            | Lang::TypeScript
+            | Lang::Php
+            | Lang::AsciiDoc
+            | Lang::Protobuf => "//",
+            Lang::Python
+            | Lang::Ruby
+            | Lang::Elixir
+            | Lang::Shell
+            | Lang::Toml
+            | Lang::Yaml
+            | Lang::Hcl
+            | Lang::Nix
+            | Lang::Cmake
+            | Lang::Dockerfile
+            | Lang::Makefile => "#",
+            Lang::Lua | Lang::Haskell | Lang::Sql => "--",
+            Lang::Latex => "%",
+            Lang::Rst => "..",
+            Lang::Ini => ";",
+            Lang::GitCommit => "#",
+        }
+    }
+
+    /// Default LSP `languageId` for servers that expect one.
+    pub fn lsp_language_id(self) -> &'static str {
+        match self {
+            Lang::Plain | Lang::GitCommit => "plaintext",
+            Lang::Rust => "rust",
+            Lang::Go => "go",
+            Lang::C => "c",
+            Lang::Cpp => "cpp",
+            Lang::Java => "java",
+            Lang::Kotlin => "kotlin",
+            Lang::Swift => "swift",
+            Lang::Zig => "zig",
+            Lang::Dart => "dart",
+            Lang::Python => "python",
+            Lang::JavaScript => "javascript",
+            Lang::TypeScript => "typescript",
+            Lang::Ruby => "ruby",
+            Lang::Php => "php",
+            Lang::Lua => "lua",
+            Lang::Haskell => "haskell",
+            Lang::Elixir => "elixir",
+            Lang::Sql => "sql",
+            Lang::Shell => "shellscript",
+            Lang::Markdown => "markdown",
+            Lang::Latex => "latex",
+            Lang::Rst => "restructuredtext",
+            Lang::AsciiDoc => "asciidoc",
+            Lang::Json => "json",
+            Lang::Toml => "toml",
+            Lang::Yaml => "yaml",
+            Lang::Ini => "ini",
+            Lang::Hcl => "hcl",
+            Lang::Nix => "nix",
+            Lang::Cmake => "cmake",
+            Lang::Dockerfile => "dockerfile",
+            Lang::Makefile => "makefile",
+            Lang::Protobuf => "proto",
+            Lang::Html => "html",
+            Lang::Css => "css",
+            Lang::Vue => "vue",
+            Lang::Svelte => "svelte",
+            Lang::Diff => "diff",
+        }
+    }
+
     /// Modes where prose-oriented features such as spell checking make sense.
     pub fn is_prose(self) -> bool {
         matches!(

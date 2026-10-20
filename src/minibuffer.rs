@@ -15,6 +15,8 @@ pub enum PromptKind {
 pub struct CompletionState {
     pub candidates: Vec<String>,
     pub index: Option<usize>,
+    /// The candidates are the contents of the directory in the input.
+    pub directory_listing: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -132,6 +134,7 @@ impl Minibuffer {
     }
 
     pub fn set_text(&mut self, text: &str) {
+        self.reset_completion();
         self.input = text.chars().collect();
         self.cursor = self.input.len();
     }

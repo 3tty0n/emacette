@@ -11,11 +11,11 @@ Part of [nano-emacs](../README.md).
 ## Files and git
 
 - `C-x C-s` — save the buffer.
-- `C-x C-c` — quit, asking before discarding changes.
+- `C-x C-c` — quit; prompt only when the buffer differs from the last loaded or saved text.
 - `C-x C-w` — write the buffer to a file (save as).
 - `C-x C-f` — find a file.
 - `C-c C-c` — save and quit, finishing a git commit.
-- `C-c C-k` — abort a git commit without saving.
+- `C-c C-k` — abort a git commit without saving (prompts only when changed).
 
 ## Moving
 
@@ -26,6 +26,7 @@ Part of [nano-emacs](../README.md).
 - `M-<` / `M->` — beginning / end of buffer.
 - `C-v` / `M-v` — page down / page up.
 - `M-g g` — go to line.
+- `M-g n` / `M-g p` — next / previous LSP diagnostic.
 - `C-l` — recentre the screen and repaint.
 
 ## Editing and regions
@@ -45,6 +46,7 @@ Part of [nano-emacs](../README.md).
 - `C-o` — open a line below point.
 - `C-/` or `C-_` — undo; `M-x redo` redoes.
 - `TAB` / `S-TAB` — indent / unindent.
+- `M-;` — comment or uncomment the current line or region.
 - `M-$` — prompt to replace the misspelled word at point.
 
 ### Region behaviour
@@ -69,10 +71,11 @@ Part of [nano-emacs](../README.md).
 ## Minibuffer
 
 - `M-x` — run a command by name.
-- `TAB` / `S-TAB` — complete or cycle candidates.
+- `TAB` / `S-TAB` — select or cycle candidates.
 - `RET` — accept.
 - `C-g` — cancel.
-- `C-p` / `C-n` or `Up` / `Down` — history.
+- `C-p` / `C-n` or `Up` / `Down` — select completion candidates when the menu is open; otherwise move through history.
+- `M-p` / `M-n` — move through history even while the menu is open.
 - `C-a` / `C-e`, `C-b` / `C-f`, `Home` / `End` — move within the input.
 - `C-k` — kill to the end of the input.
 - `C-w` — delete the previous word.
@@ -86,10 +89,19 @@ Part of [nano-emacs](../README.md).
 - Word characters and `Backspace` — filter the candidates.
 - Other keys dismiss the menu and run normally.
 
+## Diagnostics
+
+- Diagnostics come from a configured LSP server.
+- `diagnostics_inline` underlines errors and warnings in the buffer.
+- `diagnostics_popup` shows the current line's diagnostics above the mode line.
+- `M-g n` / `M-g p` move between diagnostics.
+- `M-x next-error` / `previous-error` are the command equivalents.
+
 ## Spelling
 
 - `M-x flyspell-mode` — toggle misspelling highlights.
 - `M-x ispell-next` / `ispell-previous` — jump between misspelled words.
 - `M-x ispell-buffer` — check the whole buffer.
 
-See [Completion](completion.md) and [Spelling](spelling.md) for details.
+See [Completion](completion.md), [Spelling](spelling.md), and [LSP](lsp.md)
+for details.

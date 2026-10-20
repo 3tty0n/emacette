@@ -82,29 +82,45 @@ fn run() -> Result<i32, String> {
     let mut stdout = io::stdout();
     let mut renderer = render::Renderer::new();
 
+    let mut redraw = true;
     loop {
-        let (width, height) = terminal::size().unwrap_or((80, 24));
-        let (width, height) = if width == 0 || height == 0 {
-            (80, 24)
-        } else {
-            (width, height)
-        };
-        let frame = renderer.render(&mut editor, width as usize, height as usize);
-        if !frame.output.is_empty() {
-            stdout
-                .write_all(frame.output.as_bytes())
-                .and_then(|()| stdout.flush())
-                .map_err(|e| format!("write failed: {e}"))?;
+        // Language servers run asynchronously.  Poll them even when the user
+        // is idle so diagnostics and completion responses can appear.
+        if editor.poll_lsp() {
+            redraw = true;
+        }
+
+        if redraw {
+            let (width, height) = terminal::size().unwrap_or((80, 24));
+            let (width, height) = if width == 0 || height == 0 {
+                (80, 24)
+            } else {
+                (width, height)
+            };
+            let frame = renderer.render(&mut editor, width as usize, height as usize);
+            if !frame.output.is_empty() {
+                stdout
+                    .write_all(frame.output.as_bytes())
+                    .and_then(|()| stdout.flush())
+                    .map_err(|e| format!("write failed: {e}"))?;
+            }
+            redraw = false;
         }
 
         if editor.should_quit {
             break;
         }
 
+        let ready = event::poll(Duration::from_millis(50))
+            .map_err(|e| format!("terminal poll failed: {e}"))?;
+        if !ready {
+            continue;
+        }
         handle_event(
             &mut editor,
             event::read().map_err(|e| format!("terminal read failed: {e}"))?,
         );
+        redraw = true;
 
         // If several keys are already buffered (fast typing, key repeat,
         // paste), apply them all before painting once.  The renderer only

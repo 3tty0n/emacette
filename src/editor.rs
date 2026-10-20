@@ -7,10 +7,11 @@ use std::path::PathBuf;
 
 use crate::buffer::{Buffer, CaseOp, Coalesce, Point};
 use crate::completion::{self, EditorCompletion};
-use crate::config::Config;
+use crate::config::{Config, Settings};
 use crate::help;
 use crate::highlight::Highlighter;
 use crate::key::{Key, KeyCode};
+use crate::lsp::{Diagnostic, LspClient, LspEvent, Severity};
 use crate::minibuffer::{CompletionState, Minibuffer, PromptKind};
 use crate::search::{find_backward, find_forward, find_last, SearchState};
 use crate::spell::{SpellChecker, SpellState};
@@ -34,6 +35,9 @@ pub enum Cmd {
     ToggleEditorCompletion,
     CompleteSymbol,
     ToggleSpellCheck,
+    CommentDwm,
+    NextError,
+    PreviousError,
     SpellWord,
     NextSpellingError,
     PreviousSpellingError,
@@ -71,6 +75,9 @@ pub const COMMANDS: &[(&str, Cmd)] = &[
     ("toggle-editor-completion", Cmd::ToggleEditorCompletion),
     ("complete-symbol", Cmd::CompleteSymbol),
     ("completion-at-point", Cmd::CompleteSymbol),
+    ("comment-dwim", Cmd::CommentDwm),
+    ("next-error", Cmd::NextError),
+    ("previous-error", Cmd::PreviousError),
     ("flyspell-mode", Cmd::ToggleSpellCheck),
     ("spell-check-mode", Cmd::ToggleSpellCheck),
     ("toggle-spell-check", Cmd::ToggleSpellCheck),
@@ -126,18 +133,31 @@ pub struct Overlay {
     pub scroll: usize,
 }
 
+#[derive(Clone, Debug)]
+struct LspCompletionContext {
+    request_id: i64,
+    start: Point,
+    end: Point,
+    prefix: String,
+}
+
 pub struct Editor {
     pub buffer: Buffer,
     pub mode: Lang,
     pub theme: Theme,
     pub view: View,
     pub config: Config,
+    pub settings: Settings,
     pub highlighter: Highlighter,
     pub minibuffer: Option<Minibuffer>,
     pub search: Option<SearchState>,
     pub editor_completion: Option<EditorCompletion>,
     pub spell: SpellState,
     word_cache: Option<(u64, Vec<String>)>,
+    pub lsp: Option<LspClient>,
+    pub diagnostics: Vec<Diagnostic>,
+    lsp_completion: Option<LspCompletionContext>,
+    last_lsp_version: u64,
     confirm: Option<Confirm>,
     pub overlay: Option<Overlay>,
     pub message: String,
@@ -186,19 +206,20 @@ impl Editor {
             .unwrap_or_default();
         let mode = Lang::detect(buffer.path.as_deref(), Some(&first_line));
         let theme = Theme::by_name(config.theme);
+        let settings = config.settings_for(mode);
         let version = buffer.version;
-        let spell_checker = if config.spell_check {
-            SpellChecker::load(config.spell_dictionary.as_deref())
+        let spell_checker = if settings.spell_check {
+            SpellChecker::load(settings.spell_dictionary.as_deref())
         } else {
             None
         };
-        let spell_missing = config.spell_check && spell_checker.is_none();
-        let spell = SpellState::new(config.spell_check, spell_checker);
+        let spell_missing = settings.spell_check && spell_checker.is_none();
+        let spell = SpellState::new(settings.spell_check, spell_checker);
         let view = View {
-            line_numbers: config.line_numbers,
-            tab_width: config.tab_width,
-            highlight_trailing_ws: config.highlight_trailing_ws,
-            truncate_lines: config.truncate_lines,
+            line_numbers: settings.line_numbers,
+            tab_width: settings.tab_width,
+            highlight_trailing_ws: settings.highlight_trailing_ws,
+            truncate_lines: settings.truncate_lines,
             ..View::default()
         };
         let mut editor = Self {
@@ -206,13 +227,18 @@ impl Editor {
             mode,
             theme,
             view,
-            highlighter: Highlighter::new(mode, version),
             config,
+            settings,
+            highlighter: Highlighter::new(mode, version),
             minibuffer: None,
             search: None,
             editor_completion: None,
             spell,
             word_cache: None,
+            lsp: None,
+            diagnostics: Vec::new(),
+            lsp_completion: None,
+            last_lsp_version: version,
             confirm: None,
             overlay: None,
             message: String::new(),
@@ -226,10 +252,18 @@ impl Editor {
         if spell_missing {
             editor.message = "Spell check: no English dictionary found".into();
         }
+        editor.start_lsp();
         editor
     }
 
     // ------------------------------------------------------------- helpers
+
+    fn apply_settings(&mut self) {
+        self.view.tab_width = self.settings.tab_width;
+        self.view.line_numbers = self.settings.line_numbers;
+        self.view.highlight_trailing_ws = self.settings.highlight_trailing_ws;
+        self.view.truncate_lines = self.settings.truncate_lines;
+    }
 
     pub fn sync_highlighter(&mut self) {
         if self.highlighter.lang != self.mode {
@@ -274,8 +308,10 @@ impl Editor {
             .map(|l| l.iter().copied().collect())
             .unwrap_or_default();
         self.mode = Lang::detect(buffer.path.as_deref(), Some(&first_line));
+        self.settings = self.config.settings_for(self.mode);
         self.highlighter = Highlighter::new(self.mode, buffer.version);
         self.buffer = buffer;
+        self.apply_settings();
         self.view.top = 0;
         self.view.top_offset = 0;
         self.view.left = 0;
@@ -283,6 +319,8 @@ impl Editor {
         self.editor_completion = None;
         self.word_cache = None;
         self.spell.clear();
+        self.configure_spell();
+        self.start_lsp();
         self.prefix = None;
         self.needs_redraw = true;
     }
@@ -327,7 +365,7 @@ impl Editor {
         };
         self.buffer.begin_command();
         self.handle_normal(key);
-        if (self.config.editor_completion || self.editor_completion.is_some())
+        if (self.settings.editor_completion || self.editor_completion.is_some())
             && (self_insert || backspace)
         {
             self.update_editor_completion(false);
@@ -341,6 +379,7 @@ impl Editor {
         }
         if let Some(mb) = self.minibuffer.as_mut() {
             mb.insert_str(text);
+            self.prime_completion();
             return;
         }
         if self.search.is_some() {
@@ -371,10 +410,12 @@ impl Editor {
             }
             KeyCode::Esc => {
                 self.editor_completion = None;
+                self.lsp_completion = None;
                 self.message = "Quit".into();
             }
             KeyCode::Char('g') if key.ctrl => {
                 self.editor_completion = None;
+                self.lsp_completion = None;
                 self.message = "Quit".into();
             }
             KeyCode::Up => self.move_editor_completion(false),
@@ -383,6 +424,7 @@ impl Editor {
             KeyCode::Char('n') if key.ctrl => self.move_editor_completion(true),
             _ => {
                 self.editor_completion = None;
+                self.lsp_completion = None;
                 return false;
             }
         }
@@ -400,6 +442,7 @@ impl Editor {
     }
 
     fn accept_editor_completion(&mut self) {
+        self.lsp_completion = None;
         let Some(completion) = self.editor_completion.take() else {
             return;
         };
@@ -414,24 +457,54 @@ impl Editor {
     fn update_editor_completion(&mut self, force: bool) {
         if self.minibuffer.is_some() || self.overlay.is_some() {
             self.editor_completion = None;
+            self.lsp_completion = None;
             return;
         }
         let row = self.buffer.point.row;
+        let end = self.buffer.point;
         let (start, prefix) = {
             let line = &self.buffer.lines[row];
-            completion::prefix_at(line, self.buffer.point.col)
+            completion::prefix_at(line, end.col)
         };
-        let minimum = if force { 1 } else { 2 };
+        let lsp_available = self.lsp.is_some();
+        let minimum = if force {
+            if lsp_available {
+                0
+            } else {
+                1
+            }
+        } else {
+            2
+        };
         if prefix.chars().count() < minimum {
             self.editor_completion = None;
+            self.lsp_completion = None;
             return;
         }
-        let words = self.completion_words();
-        let candidates = completion::candidates(&prefix, &words, 100);
+        self.sync_lsp();
+        let request_id = self
+            .lsp
+            .as_mut()
+            .and_then(|lsp| lsp.request_completion(row, end.col));
+        self.lsp_completion = request_id.map(|request_id| LspCompletionContext {
+            request_id,
+            start: Point::new(row, start),
+            end,
+            prefix: prefix.clone(),
+        });
+
+        let candidates = if prefix.is_empty() {
+            Vec::new()
+        } else {
+            let words = self.completion_words();
+            completion::candidates(&prefix, &words, 100)
+        };
         if candidates.is_empty() {
             self.editor_completion = None;
-            if force {
+            if force && request_id.is_none() {
                 self.message = "No completion at point".into();
+            } else if force {
+                self.message = "Waiting for LSP completion".into();
             }
             return;
         }
@@ -439,7 +512,7 @@ impl Editor {
             candidates,
             index: 0,
             start: Point::new(row, start),
-            end: self.buffer.point,
+            end,
             prefix,
         });
     }
@@ -491,6 +564,151 @@ impl Editor {
         self.spell.spans(self.buffer.version, row, line, &syntax)
     }
 
+    fn start_lsp(&mut self) {
+        self.lsp = None;
+        self.diagnostics.clear();
+        self.lsp_completion = None;
+        let command = self
+            .settings
+            .lsp_command
+            .as_deref()
+            .filter(|command| !command.is_empty());
+        let Some(command) = command else {
+            return;
+        };
+        let Some(path) = self.buffer.path.clone() else {
+            return;
+        };
+        let language_id = self
+            .settings
+            .lsp_language_id
+            .clone()
+            .unwrap_or_else(|| self.mode.lsp_language_id().to_string());
+        let text = self.buffer.text();
+        match LspClient::start(command, &language_id, &path, &text) {
+            Ok(client) => {
+                self.lsp = Some(client);
+                self.last_lsp_version = self.buffer.version;
+            }
+            Err(error) => {
+                self.message = format!("LSP: {error}");
+            }
+        }
+    }
+
+    /// Send full-text changes to the language server once per buffer version.
+    pub fn sync_lsp(&mut self) {
+        let Some(lsp) = self.lsp.as_mut() else {
+            return;
+        };
+        if self.last_lsp_version == self.buffer.version {
+            return;
+        }
+        lsp.did_change(&self.buffer.text());
+        self.last_lsp_version = self.buffer.version;
+    }
+
+    /// Drain language-server events. Returns true when the display changed.
+    pub fn poll_lsp(&mut self) -> bool {
+        self.sync_lsp();
+        let events = match self.lsp.as_mut() {
+            Some(lsp) => lsp.poll(),
+            None => return false,
+        };
+        let mut changed = false;
+        for event in events {
+            match event {
+                LspEvent::Diagnostics(diagnostics) => {
+                    self.diagnostics = diagnostics;
+                    changed = true;
+                }
+                LspEvent::Completion { request_id, items } => {
+                    if let Some(context) = self.lsp_completion.take() {
+                        if context.request_id == request_id {
+                            changed |= self.apply_lsp_completion(context, items);
+                        }
+                    }
+                }
+                LspEvent::Error(error) => {
+                    self.message = format!("LSP: {error}");
+                    changed = true;
+                }
+            }
+        }
+        changed
+    }
+
+    fn apply_lsp_completion(&mut self, context: LspCompletionContext, items: Vec<String>) -> bool {
+        if items.is_empty() || self.minibuffer.is_some() || self.overlay.is_some() {
+            return false;
+        }
+        if self.buffer.point != context.end {
+            return false;
+        }
+        let line = &self.buffer.lines[self.buffer.point.row];
+        let (start, prefix) = completion::prefix_at(line, self.buffer.point.col);
+        if start != context.start.col || prefix != context.prefix {
+            return false;
+        }
+        self.editor_completion = Some(EditorCompletion {
+            candidates: items,
+            index: 0,
+            start: context.start,
+            end: context.end,
+            prefix,
+        });
+        true
+    }
+
+    pub fn diagnostic_ranges(&self, row: usize) -> Vec<(usize, usize, Severity)> {
+        if !self.settings.diagnostics_inline || row >= self.buffer.line_count() {
+            return Vec::new();
+        }
+        let len = self.buffer.lines[row].len();
+        self.diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.row == row)
+            .filter_map(|diagnostic| {
+                let start = diagnostic.start.min(len);
+                let end = diagnostic.end.min(len);
+                if end > start {
+                    Some((start, end, diagnostic.severity))
+                } else if start < len {
+                    Some((start, start + 1, diagnostic.severity))
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    pub fn diagnostic_popup(&self) -> Vec<&Diagnostic> {
+        if !self.settings.diagnostics_popup {
+            return Vec::new();
+        }
+        let row = self.buffer.point.row;
+        self.diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.row == row)
+            .take(4)
+            .collect()
+    }
+
+    fn configure_spell(&mut self) {
+        self.spell.clear();
+        if !self.settings.spell_check || !self.mode.is_prose() {
+            self.spell.enabled = false;
+            return;
+        }
+        if self.spell.checker.is_none() {
+            self.spell.checker = SpellChecker::load(self.settings.spell_dictionary.as_deref());
+        }
+        self.spell.enabled = self.spell.checker.is_some();
+        if !self.spell.enabled {
+            self.message = "Spell check: no English dictionary found (set spell_dictionary)".into();
+        }
+    }
+
     fn enable_spell_check(&mut self) -> bool {
         if self.spell.enabled {
             return true;
@@ -500,10 +718,11 @@ impl Editor {
             return false;
         }
         if self.spell.checker.is_none() {
-            self.spell.checker = SpellChecker::load(self.config.spell_dictionary.as_deref());
+            self.spell.checker = SpellChecker::load(self.settings.spell_dictionary.as_deref());
         }
         if self.spell.checker.is_some() {
             self.spell.enabled = true;
+            self.settings.spell_check = true;
             self.spell.clear();
             true
         } else {
@@ -516,6 +735,7 @@ impl Editor {
     fn toggle_spell_check(&mut self) {
         if self.spell.enabled {
             self.spell.enabled = false;
+            self.settings.spell_check = false;
             self.spell.clear();
             self.message = "Spell check off".into();
         } else if self.enable_spell_check() {
@@ -624,6 +844,9 @@ impl Editor {
             return;
         }
         self.message.clear();
+        if key.code == KeyCode::Esc || (key.ctrl && matches!(key.code, KeyCode::Char('g'))) {
+            self.lsp_completion = None;
+        }
         if self.meta_prefix {
             self.meta_prefix = false;
             let cancel =
@@ -644,12 +867,12 @@ impl Editor {
             KeyCode::Char(c) if key.alt => self.handle_alt(c),
             KeyCode::Char(c) => {
                 self.buffer.insert_char(c);
-                if self.config.auto_fill {
+                if self.settings.auto_fill {
                     self.auto_fill();
                 }
             }
             KeyCode::Enter => {
-                self.buffer.newline(self.config.auto_indent);
+                self.buffer.newline(self.settings.auto_indent);
             }
             KeyCode::Tab => self.indent(),
             KeyCode::BackTab => self.unindent(),
@@ -728,7 +951,7 @@ impl Editor {
                 self.buffer.open_line();
             }
             'j' => {
-                self.buffer.newline(self.config.auto_indent);
+                self.buffer.newline(self.settings.auto_indent);
             }
             'x' => {
                 self.prefix = Some(Prefix::Cx);
@@ -784,6 +1007,7 @@ impl Editor {
             }
             'x' => self.start_mx(),
             'm' => self.buffer.back_to_indentation(),
+            ';' => self.comment_dwim(),
             '$' => self.spell_word(),
             _ => {
                 self.message = format!("M-{} is unbound", c);
@@ -822,6 +1046,8 @@ impl Editor {
             },
             Prefix::MetaG => match key.code {
                 KeyCode::Char('g') if !key.ctrl && !key.alt => self.prompt_goto_line(),
+                KeyCode::Char('n') if !key.ctrl && !key.alt => self.next_diagnostic(true),
+                KeyCode::Char('p') if !key.ctrl && !key.alt => self.next_diagnostic(false),
                 _ => self.message = format!("M-g {} is unbound", key.display()),
             },
         }
@@ -870,14 +1096,119 @@ impl Editor {
         }
     }
 
+    fn comment_dwim(&mut self) {
+        let prefix = self.settings.comment_start.clone();
+        if prefix.is_empty() {
+            self.message = "No line-comment syntax for this mode".into();
+            return;
+        }
+        let (start, end) = match self.buffer.region() {
+            Some((start, end)) => (start, end),
+            None => {
+                let row = self.buffer.point.row;
+                (
+                    Point::new(row, 0),
+                    Point::new(row, self.buffer.lines[row].len()),
+                )
+            }
+        };
+        let rows: Vec<usize> = (start.row..=end.row.min(self.buffer.line_count() - 1)).collect();
+        if rows.is_empty() {
+            return;
+        }
+        let mut nonblank = 0usize;
+        let mut commented = 0usize;
+        for &row in &rows {
+            let line = &self.buffer.lines[row];
+            let indent = line.iter().take_while(|c| c.is_whitespace()).count();
+            let text: String = line.iter().skip(indent).collect();
+            if text.is_empty() {
+                continue;
+            }
+            nonblank += 1;
+            if text.starts_with(&prefix) {
+                commented += 1;
+            }
+        }
+        if nonblank == 0 {
+            self.message = "Nothing to comment".into();
+            return;
+        }
+        let remove = commented == nonblank;
+        for &row in rows.iter().rev() {
+            let line = self.buffer.lines[row].clone();
+            let indent = line.iter().take_while(|c| c.is_whitespace()).count();
+            if line.iter().skip(indent).all(|c| c.is_whitespace()) {
+                continue;
+            }
+            self.buffer.set_point(Point::new(row, indent));
+            if remove {
+                for _ in 0..prefix.chars().count() {
+                    self.buffer.delete_forward();
+                }
+                if self.buffer.lines[row].get(indent) == Some(&' ') {
+                    self.buffer.delete_forward();
+                }
+            } else {
+                self.buffer.insert_text(&format!("{prefix} "));
+            }
+        }
+        self.message = if remove {
+            "Uncommented".into()
+        } else {
+            "Commented".into()
+        };
+    }
+
+    fn next_diagnostic(&mut self, forward: bool) {
+        let mut diagnostics: Vec<&Diagnostic> = self
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.row < self.buffer.line_count())
+            .collect();
+        if diagnostics.is_empty() {
+            self.message = "No LSP diagnostics".into();
+            return;
+        }
+        diagnostics.sort_by_key(|diagnostic| (diagnostic.row, diagnostic.start));
+        let point = (self.buffer.point.row, self.buffer.point.col);
+        let selected = if forward {
+            diagnostics
+                .iter()
+                .find(|diagnostic| (diagnostic.row, diagnostic.start) > point)
+                .copied()
+                .or_else(|| diagnostics.first().copied())
+        } else {
+            diagnostics
+                .iter()
+                .rev()
+                .find(|diagnostic| (diagnostic.row, diagnostic.start) < point)
+                .copied()
+                .or_else(|| diagnostics.last().copied())
+        };
+        let Some(diagnostic) = selected else {
+            return;
+        };
+        let row = diagnostic.row;
+        let col = diagnostic.start.min(self.buffer.lines[row].len());
+        self.buffer.set_point(Point::new(row, col));
+        let severity = match diagnostic.severity {
+            Severity::Error => "Error",
+            Severity::Warning => "Warning",
+            Severity::Information => "Info",
+            Severity::Hint => "Hint",
+        };
+        self.message = format!("{severity}: {}", diagnostic.message);
+    }
+
     fn indent(&mut self) {
         let row = self.buffer.point.row;
         let col = display_col(
             &self.buffer.lines[row],
             self.buffer.point.col,
-            self.config.tab_width,
+            self.settings.tab_width,
         );
-        let spaces = self.config.tab_width - (col % self.config.tab_width);
+        let spaces = self.settings.tab_width - (col % self.settings.tab_width);
         let text = " ".repeat(spaces);
         self.buffer.insert_text(&text);
     }
@@ -885,12 +1216,12 @@ impl Editor {
     /// `auto-fill-mode`: break the current line at the last whitespace that
     /// fits within `fill_column` after a self-insert.
     fn auto_fill(&mut self) {
-        let fill_column = self.config.fill_column;
+        let fill_column = self.settings.fill_column;
         if fill_column == 0 {
             return;
         }
         let row = self.buffer.point.row;
-        let tab_width = self.config.tab_width;
+        let tab_width = self.settings.tab_width;
         let (point_col, break_col, indent_len) = {
             let line = &self.buffer.lines[row];
             let point_col = self.buffer.point.col.min(line.len());
@@ -930,7 +1261,7 @@ impl Editor {
 
     fn unindent(&mut self) {
         let row = self.buffer.point.row;
-        let width = self.config.tab_width;
+        let width = self.settings.tab_width;
         let mut removed = 0;
         while removed < width && self.buffer.point.col > 0 {
             let col = self.buffer.point.col;
@@ -951,7 +1282,9 @@ impl Editor {
             Ok(path) => {
                 self.message = format!("Wrote {}", path.display());
                 if self.mode == Lang::GitCommit
-                    && self.buffer.is_effectively_empty(self.config.comment_char)
+                    && self
+                        .buffer
+                        .is_effectively_empty(&self.settings.comment_start)
                 {
                     self.message.push_str("   (warning: empty commit message)");
                 }
@@ -968,7 +1301,9 @@ impl Editor {
         match self.buffer.save() {
             Ok(_) => {
                 if self.mode == Lang::GitCommit
-                    && self.buffer.is_effectively_empty(self.config.comment_char)
+                    && self
+                        .buffer
+                        .is_effectively_empty(&self.settings.comment_start)
                 {
                     self.confirm = Some(Confirm {
                         kind: ConfirmKind::EmptyCommit,
@@ -983,7 +1318,7 @@ impl Editor {
     }
 
     fn abort_commit(&mut self) {
-        if self.buffer.modified {
+        if self.buffer.has_unsaved_changes() {
             self.confirm = Some(Confirm {
                 kind: ConfirmKind::AbortCommit,
                 question: "Abort commit and discard changes? (y/n)".into(),
@@ -994,7 +1329,7 @@ impl Editor {
     }
 
     fn quit_request(&mut self) {
-        if !self.buffer.modified || !self.config.confirm_on_quit {
+        if !self.buffer.has_unsaved_changes() || !self.config.confirm_on_quit {
             self.finish_quit(0);
             return;
         }
@@ -1230,7 +1565,15 @@ impl Editor {
         if self.minibuffer.is_none() {
             return;
         }
-        let completion_key = matches!(key.code, KeyCode::Tab | KeyCode::BackTab);
+        let completion_active = self.minibuffer.as_ref().is_some_and(|mb| {
+            mb.completion
+                .as_ref()
+                .is_some_and(|completion| !completion.candidates.is_empty())
+        });
+        let completion_key = matches!(key.code, KeyCode::Tab | KeyCode::BackTab)
+            || (completion_active
+                && (matches!(key.code, KeyCode::Up | KeyCode::Down)
+                    || (key.ctrl && matches!(key.code, KeyCode::Char('n' | 'p')))));
         if !completion_key {
             if let Some(mb) = self.minibuffer.as_mut() {
                 mb.reset_completion();
@@ -1238,6 +1581,9 @@ impl Editor {
         }
         let mut history_prev = false;
         let mut history_next = false;
+        let mut completion_prev = false;
+        let mut completion_next = false;
+        let mut edited = false;
         let mut complete = None;
         let mut accept = false;
         let mut cancel = false;
@@ -1253,24 +1599,46 @@ impl Editor {
                     'f' => mb.right(),
                     'd' => {
                         mb.delete_forward();
+                        edited = true;
                     }
                     'k' => {
                         mb.kill_to_end();
+                        edited = true;
                     }
                     'w' => {
                         mb.delete_word_backward();
+                        edited = true;
                     }
                     'g' => cancel = true,
-                    'p' => history_prev = true,
-                    'n' => history_next = true,
+                    'p' => {
+                        if completion_active {
+                            completion_prev = true;
+                        } else {
+                            history_prev = true;
+                        }
+                    }
+                    'n' => {
+                        if completion_active {
+                            completion_next = true;
+                        } else {
+                            history_next = true;
+                        }
+                    }
                     _ => {}
                 },
-                KeyCode::Char(c) if !key.alt => mb.insert(c),
+                KeyCode::Char('n') if key.alt => history_next = true,
+                KeyCode::Char('p') if key.alt => history_prev = true,
+                KeyCode::Char(c) if !key.alt => {
+                    mb.insert(c);
+                    edited = true;
+                }
                 KeyCode::Backspace => {
                     mb.backspace();
+                    edited = true;
                 }
                 KeyCode::Delete => {
                     mb.delete_forward();
+                    edited = true;
                 }
                 KeyCode::Left => mb.left(),
                 KeyCode::Right => mb.right(),
@@ -1280,9 +1648,31 @@ impl Editor {
                 KeyCode::BackTab => complete = Some(false),
                 KeyCode::Enter => accept = true,
                 KeyCode::Esc => cancel = true,
-                KeyCode::Up => history_prev = true,
-                KeyCode::Down => history_next = true,
+                KeyCode::Up => {
+                    if completion_active {
+                        completion_prev = true;
+                    } else {
+                        history_prev = true;
+                    }
+                }
+                KeyCode::Down => {
+                    if completion_active {
+                        completion_next = true;
+                    } else {
+                        history_next = true;
+                    }
+                }
                 _ => {}
+            }
+        }
+        if completion_prev && !self.select_completion(false) {
+            if let Some(mb) = self.minibuffer.as_mut() {
+                mb.history_prev(&self.history);
+            }
+        }
+        if completion_next && !self.select_completion(true) {
+            if let Some(mb) = self.minibuffer.as_mut() {
+                mb.history_next(&self.history);
             }
         }
         if history_prev {
@@ -1294,6 +1684,9 @@ impl Editor {
             if let Some(mb) = self.minibuffer.as_mut() {
                 mb.history_next(&self.history);
             }
+        }
+        if edited {
+            self.prime_completion();
         }
         if let Some(forward) = complete {
             self.complete(forward);
@@ -1309,6 +1702,7 @@ impl Editor {
 
     fn start_mx(&mut self) {
         self.minibuffer = Some(Minibuffer::new("M-x ", PromptKind::Mx, ""));
+        self.prime_completion();
     }
 
     fn prompt_find_file(&mut self) {
@@ -1323,6 +1717,7 @@ impl Editor {
             PromptKind::FindFile,
             &initial,
         ));
+        self.prime_completion();
     }
 
     fn prompt_write_file(&mut self, then_quit: bool) {
@@ -1343,6 +1738,7 @@ impl Editor {
             PromptKind::WriteFile { then_quit },
             &initial,
         ));
+        self.prime_completion();
     }
 
     fn prompt_goto_line(&mut self) {
@@ -1427,12 +1823,30 @@ impl Editor {
                 .minibuffer
                 .as_ref()
                 .is_some_and(|mb| mb.text().ends_with('/'));
-        if !directory_input && self.cycle_completion(forward) {
+        let listing = self
+            .minibuffer
+            .as_ref()
+            .and_then(|mb| mb.completion.as_ref())
+            .is_some_and(|completion| completion.directory_listing);
+        if (!directory_input || listing) && self.cycle_completion(forward) {
             return;
         }
         match kind {
-            PromptKind::Mx => self.complete_command(),
-            PromptKind::FindFile | PromptKind::WriteFile { .. } => self.complete_path(),
+            PromptKind::Mx => self.complete_command(true),
+            PromptKind::FindFile | PromptKind::WriteFile { .. } => self.complete_path(true),
+            PromptKind::GotoLine | PromptKind::SpellReplace { .. } => {}
+        }
+    }
+
+    /// Fill the candidate menu without changing the typed input.  Used when a
+    /// prompt opens and after each edit, so the list is visible immediately.
+    fn prime_completion(&mut self) {
+        let Some(kind) = self.minibuffer.as_ref().map(|m| m.kind.clone()) else {
+            return;
+        };
+        match kind {
+            PromptKind::Mx => self.complete_command(false),
+            PromptKind::FindFile | PromptKind::WriteFile { .. } => self.complete_path(false),
             PromptKind::GotoLine | PromptKind::SpellReplace { .. } => {}
         }
     }
@@ -1480,6 +1894,7 @@ impl Editor {
         let candidate = state.candidates[selected].clone();
         mb.set_text(&candidate);
         state.index = Some(selected);
+        state.directory_listing = false;
         let hint = format!(
             "[{}/{}] {}",
             selected + 1,
@@ -1491,10 +1906,56 @@ impl Editor {
         true
     }
 
+    /// Ctrl-n / Ctrl-p selection.  If the current text is already a candidate
+    /// but no row is selected yet, move past it instead of no-op selecting it.
+    fn select_completion(&mut self, forward: bool) -> bool {
+        let Some(mb) = self.minibuffer.as_mut() else {
+            return false;
+        };
+        let current = mb.text();
+        let Some(mut state) = mb.completion.take() else {
+            return false;
+        };
+        let len = state.candidates.len();
+        if len == 0 {
+            return false;
+        }
+        if state.index.is_none() {
+            if let Some(index) = state.candidates.iter().position(|c| *c == current) {
+                let selected = if forward {
+                    (index + 1) % len
+                } else {
+                    (index + len - 1) % len
+                };
+                let candidate = state.candidates[selected].clone();
+                mb.set_text(&candidate);
+                state.index = Some(selected);
+                state.directory_listing = false;
+                let hint = format!(
+                    "[{}/{}] {}",
+                    selected + 1,
+                    len,
+                    completion_preview(&state.candidates)
+                );
+                mb.completion = Some(state);
+                mb.hint = hint;
+                return true;
+            }
+        }
+        mb.completion = Some(state);
+        self.cycle_completion(forward)
+    }
+
     /// Insert the shared prefix of `candidates`.  `candidates` are the exact
     /// strings to put in the minibuffer (file names, complete paths, or
     /// command names).
-    fn offer_completions(&mut self, candidates: Vec<String>, noun: &str) {
+    fn offer_completions(
+        &mut self,
+        candidates: Vec<String>,
+        noun: &str,
+        directory_listing: bool,
+        advance: bool,
+    ) {
         let Some(mb) = self.minibuffer.as_mut() else {
             return;
         };
@@ -1503,30 +1964,38 @@ impl Editor {
             mb.hint = "No match".into();
             return;
         }
-        if candidates.len() == 1 {
+        if advance && candidates.len() == 1 {
             mb.set_text(&candidates[0]);
             mb.completion = None;
             mb.hint.clear();
             return;
         }
-        let current = mb.text();
-        let prefix = common_prefix(&candidates);
-        if prefix.chars().count() > current.chars().count() {
-            mb.set_text(&prefix);
+        if advance {
+            let current = mb.text();
+            let prefix = common_prefix(&candidates);
+            if prefix.chars().count() > current.chars().count() {
+                mb.set_text(&prefix);
+            }
         }
         mb.completion = Some(CompletionState {
             candidates: candidates.clone(),
             index: None,
+            directory_listing,
         });
+        let label = if candidates.len() == 1 {
+            noun.trim_end_matches('s')
+        } else {
+            noun
+        };
         mb.hint = format!(
             "{} {}: {}",
             candidates.len(),
-            noun,
+            label,
             completion_preview(&candidates)
         );
     }
 
-    fn complete_command(&mut self) {
+    fn complete_command(&mut self, advance: bool) {
         let Some(mb) = self.minibuffer.as_ref() else {
             return;
         };
@@ -1536,10 +2005,10 @@ impl Editor {
             .map(|(name, _)| (*name).to_string())
             .filter(|name| name.starts_with(&text))
             .collect();
-        self.offer_completions(candidates, "commands");
+        self.offer_completions(candidates, "commands", false, advance);
     }
 
-    fn complete_path(&mut self) {
+    fn complete_path(&mut self, advance: bool) {
         let base_dir = self.buffer.dir();
         let raw = {
             let Some(mb) = self.minibuffer.as_mut() else {
@@ -1553,6 +2022,7 @@ impl Editor {
             }
             raw
         };
+        let listing = raw.ends_with('/');
         let (dir_part, name_part) = match raw.rfind('/') {
             Some(i) => (&raw[..=i], &raw[i + 1..]),
             None => ("", raw.as_str()),
@@ -1599,7 +2069,7 @@ impl Editor {
             .into_iter()
             .map(|(name, is_dir)| format!("{dir_part}{name}{}", if is_dir { "/" } else { "" }))
             .collect();
-        self.offer_completions(candidates, "candidates");
+        self.offer_completions(candidates, "candidates", listing, advance);
     }
 
     fn resolve_path(&self, input: &str) -> PathBuf {
@@ -1616,7 +2086,7 @@ impl Editor {
             self.message = format!("{} is a directory", path.display());
             return;
         }
-        if self.buffer.modified {
+        if self.buffer.has_unsaved_changes() {
             self.message = "Buffer modified: save it first (C-x C-s)".into();
             return;
         }
@@ -1676,11 +2146,11 @@ impl Editor {
             }
             Cmd::GotoLine => self.prompt_goto_line(),
             Cmd::ToggleLineNumbers => {
-                self.config.line_numbers = !self.config.line_numbers;
-                self.view.line_numbers = self.config.line_numbers;
+                self.settings.line_numbers = !self.settings.line_numbers;
+                self.view.line_numbers = self.settings.line_numbers;
                 self.message = format!(
                     "Line numbers {}",
-                    if self.config.line_numbers {
+                    if self.settings.line_numbers {
                         "on"
                     } else {
                         "off"
@@ -1688,11 +2158,11 @@ impl Editor {
                 );
             }
             Cmd::ToggleTrailingWs => {
-                self.config.highlight_trailing_ws = !self.config.highlight_trailing_ws;
-                self.view.highlight_trailing_ws = self.config.highlight_trailing_ws;
+                self.settings.highlight_trailing_ws = !self.settings.highlight_trailing_ws;
+                self.view.highlight_trailing_ws = self.settings.highlight_trailing_ws;
                 self.message = format!(
                     "Trailing whitespace highlight {}",
-                    if self.config.highlight_trailing_ws {
+                    if self.settings.highlight_trailing_ws {
                         "on"
                     } else {
                         "off"
@@ -1700,21 +2170,21 @@ impl Editor {
                 );
             }
             Cmd::ToggleAutoFill => {
-                self.config.auto_fill = !self.config.auto_fill;
+                self.settings.auto_fill = !self.settings.auto_fill;
                 self.message = format!(
                     "Auto-fill mode {}",
-                    if self.config.auto_fill { "on" } else { "off" }
+                    if self.settings.auto_fill { "on" } else { "off" }
                 );
             }
             Cmd::ToggleTruncateLines => {
-                self.config.truncate_lines = !self.config.truncate_lines;
-                self.view.truncate_lines = self.config.truncate_lines;
+                self.settings.truncate_lines = !self.settings.truncate_lines;
+                self.view.truncate_lines = self.settings.truncate_lines;
                 self.view.left = 0;
                 self.view.top_offset = 0;
                 self.needs_redraw = true;
                 self.message = format!(
                     "Truncate lines {}",
-                    if self.config.truncate_lines {
+                    if self.settings.truncate_lines {
                         "on"
                     } else {
                         "off (wrapping)"
@@ -1722,13 +2192,13 @@ impl Editor {
                 );
             }
             Cmd::ToggleEditorCompletion => {
-                self.config.editor_completion = !self.config.editor_completion;
-                if !self.config.editor_completion {
+                self.settings.editor_completion = !self.settings.editor_completion;
+                if !self.settings.editor_completion {
                     self.editor_completion = None;
                 }
                 self.message = format!(
                     "Editor completion {}",
-                    if self.config.editor_completion {
+                    if self.settings.editor_completion {
                         "on"
                     } else {
                         "off"
@@ -1737,6 +2207,9 @@ impl Editor {
             }
             Cmd::CompleteSymbol => self.update_editor_completion(true),
             Cmd::ToggleSpellCheck => self.toggle_spell_check(),
+            Cmd::CommentDwm => self.comment_dwim(),
+            Cmd::NextError => self.next_diagnostic(true),
+            Cmd::PreviousError => self.next_diagnostic(false),
             Cmd::SpellWord => self.spell_word(),
             Cmd::NextSpellingError => self.next_spelling_error(true),
             Cmd::PreviousSpellingError => self.next_spelling_error(false),
@@ -1796,15 +2269,19 @@ impl Editor {
         let mode = Lang::detect(self.buffer.path.as_deref(), Some(&first_line));
         if mode != self.mode {
             self.mode = mode;
+            self.settings = self.config.settings_for(mode);
             self.highlighter = Highlighter::new(mode, self.buffer.version);
+            self.apply_settings();
             self.spell.clear();
+            self.configure_spell();
             self.word_cache = None;
             self.editor_completion = None;
         }
+        self.start_lsp();
     }
 
     fn revert_buffer(&mut self) {
-        if self.buffer.modified {
+        if self.buffer.has_unsaved_changes() {
             self.message = "Buffer modified: not reverting".into();
             return;
         }
@@ -1936,6 +2413,85 @@ mod tests {
     }
 
     #[test]
+    fn m_x_opens_with_completion_candidates() {
+        let mut ed = editor("");
+        ed.start_mx();
+        let mb = ed.minibuffer.as_ref().unwrap();
+        assert_eq!(mb.text(), "");
+        let candidates = &mb.completion.as_ref().unwrap().candidates;
+        assert!(candidates.iter().any(|name| name == "save-buffer"));
+        assert!(mb.hint.contains("commands"));
+    }
+
+    #[test]
+    fn m_x_filters_candidates_while_typing() {
+        let mut ed = editor("");
+        ed.start_mx();
+        for c in "save-bu".chars() {
+            ed.handle_key(Key::ch(c));
+        }
+        let mb = ed.minibuffer.as_ref().unwrap();
+        let candidates = &mb.completion.as_ref().unwrap().candidates;
+        assert_eq!(candidates.len(), 2);
+        assert!(candidates.iter().all(|name| name.starts_with("save-bu")));
+    }
+
+    #[test]
+    fn find_file_opens_with_a_directory_listing() {
+        let dir = temp_dir();
+        fs::write(dir.join("alpha.txt"), "a").unwrap();
+        fs::write(dir.join("alphabet.txt"), "b").unwrap();
+        let mut ed = editor_in(&dir, "");
+        ed.prompt_find_file();
+        ed.minibuffer
+            .as_mut()
+            .unwrap()
+            .set_text(&format!("{}/", dir.display()));
+        ed.prime_completion();
+        let mb = ed.minibuffer.as_ref().unwrap();
+        assert_eq!(mb.text(), format!("{}/", dir.display()));
+        let candidates = &mb.completion.as_ref().unwrap().candidates;
+        assert!(candidates.iter().any(|name| name.ends_with("alpha.txt")));
+        assert!(mb.completion.as_ref().unwrap().directory_listing);
+
+        ed.handle_key(Key::code(KeyCode::Tab));
+        assert!(ed
+            .minibuffer_text()
+            .as_deref()
+            .is_some_and(|text| text.ends_with("alpha.txt")));
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn find_file_does_not_insert_a_unique_candidate_immediately() {
+        let dir = temp_dir();
+        fs::write(dir.join("only.txt"), "a").unwrap();
+        let mut ed = editor_in(&dir, "");
+        ed.prompt_find_file();
+        ed.minibuffer
+            .as_mut()
+            .unwrap()
+            .set_text(&format!("{}/", dir.display()));
+        ed.prime_completion();
+        assert_eq!(
+            ed.minibuffer_text().as_deref(),
+            Some(format!("{}/", dir.display()).as_str())
+        );
+        assert_eq!(
+            ed.minibuffer
+                .as_ref()
+                .unwrap()
+                .completion
+                .as_ref()
+                .unwrap()
+                .candidates
+                .len(),
+            1
+        );
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn command_completion_extends_and_cycles() {
         let mut ed = editor("");
         ed.start_mx();
@@ -2030,6 +2586,72 @@ mod tests {
     }
 
     #[test]
+    fn minibuffer_ctrl_np_selects_completion_candidates() {
+        let dir = temp_dir();
+        fs::write(dir.join("alpha.txt"), "a").unwrap();
+        fs::write(dir.join("alphabet.txt"), "b").unwrap();
+        let mut ed = editor_in(&dir, "");
+
+        ed.prompt_find_file();
+        ed.minibuffer.as_mut().unwrap().set_text("al");
+        ed.complete(true);
+        assert_eq!(ed.minibuffer_text().as_deref(), Some("alpha"));
+
+        ed.handle_key(Key::ctrl('n'));
+        assert_eq!(ed.minibuffer_text().as_deref(), Some("alpha.txt"));
+        ed.handle_key(Key::ctrl('n'));
+        assert_eq!(ed.minibuffer_text().as_deref(), Some("alphabet.txt"));
+        ed.handle_key(Key::ctrl('p'));
+        assert_eq!(ed.minibuffer_text().as_deref(), Some("alpha.txt"));
+        ed.handle_key(Key::code(KeyCode::Tab));
+        assert_eq!(ed.minibuffer_text().as_deref(), Some("alphabet.txt"));
+        ed.handle_key(Key::code(KeyCode::Up));
+        assert_eq!(ed.minibuffer_text().as_deref(), Some("alpha.txt"));
+        ed.handle_key(Key::code(KeyCode::Down));
+        assert_eq!(ed.minibuffer_text().as_deref(), Some("alphabet.txt"));
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn minibuffer_ctrl_n_advances_past_an_exact_candidate() {
+        let mut ed = editor("");
+        ed.start_mx();
+        ed.minibuffer.as_mut().unwrap().set_text("save-buffer");
+        ed.complete(true);
+        assert_eq!(ed.minibuffer_text().as_deref(), Some("save-buffer"));
+        ed.handle_key(Key::ctrl('n'));
+        assert_eq!(
+            ed.minibuffer_text().as_deref(),
+            Some("save-buffers-kill-terminal")
+        );
+        ed.handle_key(Key::ctrl('p'));
+        assert_eq!(ed.minibuffer_text().as_deref(), Some("save-buffer"));
+    }
+
+    #[test]
+    fn minibuffer_meta_np_uses_history() {
+        let mut ed = editor("");
+        ed.history = vec!["one".to_string(), "two".to_string()];
+        ed.start_mx();
+        ed.handle_key(Key::alt('p'));
+        assert_eq!(ed.minibuffer_text().as_deref(), Some("two"));
+        ed.handle_key(Key::alt('p'));
+        assert_eq!(ed.minibuffer_text().as_deref(), Some("one"));
+        ed.handle_key(Key::alt('n'));
+        assert_eq!(ed.minibuffer_text().as_deref(), Some("two"));
+    }
+
+    #[test]
+    fn minibuffer_ctrl_n_selects_from_the_primed_menu() {
+        let mut ed = editor("");
+        ed.start_mx();
+        ed.handle_key(Key::ctrl('n'));
+        let text = ed.minibuffer_text().unwrap();
+        assert!(text == "find-file" || text == "save-buffer");
+        assert!(ed.minibuffer.as_ref().unwrap().hint.contains("[1/"));
+    }
+
+    #[test]
     fn editing_clears_a_completion_cycle() {
         let mut ed = editor("");
         ed.start_mx();
@@ -2039,7 +2661,7 @@ mod tests {
         ed.handle_key(Key::ch('x'));
         let mb = ed.minibuffer.as_ref().unwrap();
         assert!(mb.completion.is_none());
-        assert!(mb.hint.is_empty());
+        assert_eq!(mb.hint, "No match");
     }
 
     #[test]
@@ -2317,6 +2939,34 @@ mod tests {
     }
 
     #[test]
+    fn quit_after_undoing_everything_is_immediate() {
+        let mut ed = editor("hi");
+        ed.handle_key(Key::ch('x'));
+        ed.handle_key(Key::ctrl('_'));
+        assert_eq!(ed.buffer_text(), "hi");
+        ed.handle_key(Key::ctrl('x'));
+        ed.handle_key(Key::ctrl('c'));
+        assert!(ed.should_quit);
+        assert!(ed.prompt_for_quit().is_none());
+    }
+
+    #[test]
+    fn quit_empty_new_file_after_deleting_typed_text_is_immediate() {
+        let dir = temp_dir();
+        let path = dir.join("new.txt");
+        let mut ed = Editor::from_text("", Some(path.clone()), Config::default());
+        ed.handle_key(Key::ch('x'));
+        ed.handle_key(Key::code(KeyCode::Backspace));
+        assert_eq!(ed.buffer_text(), "");
+        ed.handle_key(Key::ctrl('x'));
+        ed.handle_key(Key::ctrl('c'));
+        assert!(ed.should_quit);
+        assert!(ed.prompt_for_quit().is_none());
+        assert!(!path.exists());
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn quit_with_changes_prompts() {
         let mut ed = editor("");
         ed.handle_key(Key::ch('x'));
@@ -2432,19 +3082,83 @@ mod tests {
     }
 
     #[test]
+    fn language_section_overrides_editor_settings() {
+        let mut config = Config::default();
+        config.parse("[markdown]\nauto_fill = true\nfill_column = 24\neditor_completion = true\n");
+        let ed = Editor::from_text("", Some(PathBuf::from("note.md")), config);
+        assert_eq!(ed.mode, Lang::Markdown);
+        assert!(ed.settings.auto_fill);
+        assert_eq!(ed.settings.fill_column, 24);
+        assert!(ed.settings.editor_completion);
+        assert_eq!(ed.settings.comment_start, "");
+    }
+
+    #[test]
+    fn comment_dwim_uses_the_language_prefix() {
+        let mut ed = Editor::from_text(
+            "one\ntwo\n",
+            Some(PathBuf::from("note.rs")),
+            Config::default(),
+        );
+        assert_eq!(ed.settings.comment_start, "//");
+        ed.handle_key(Key::alt(';'));
+        assert_eq!(ed.buffer_text(), "// one\ntwo\n");
+        ed.handle_key(Key::alt(';'));
+        assert_eq!(ed.buffer_text(), "one\ntwo\n");
+    }
+
+    #[test]
+    fn comment_dwim_reports_missing_syntax() {
+        let mut ed = editor("plain\n");
+        ed.handle_key(Key::alt(';'));
+        assert!(ed.message.contains("No line-comment"));
+        assert_eq!(ed.buffer_text(), "plain\n");
+    }
+
+    #[test]
+    fn next_error_jumps_and_wraps() {
+        let mut ed = editor("one\ntwo\n");
+        ed.diagnostics = vec![
+            Diagnostic {
+                row: 0,
+                start: 0,
+                end: 3,
+                severity: Severity::Warning,
+                message: "warning".into(),
+                source: None,
+            },
+            Diagnostic {
+                row: 1,
+                start: 0,
+                end: 3,
+                severity: Severity::Error,
+                message: "error".into(),
+                source: None,
+            },
+        ];
+        ed.next_diagnostic(true);
+        assert_eq!(ed.buffer.point, Point::new(1, 0));
+        assert!(ed.message.contains("Error: error"));
+        ed.next_diagnostic(true);
+        assert_eq!(ed.buffer.point, Point::new(0, 0));
+        ed.next_diagnostic(false);
+        assert_eq!(ed.buffer.point, Point::new(1, 0));
+    }
+
+    #[test]
     fn toggle_commands_flip_fill_and_truncate() {
         let mut ed = editor("");
         ed.run_mx("auto-fill-mode");
-        assert!(ed.config.auto_fill);
+        assert!(ed.settings.auto_fill);
         ed.run_mx("auto-fill-mode");
-        assert!(!ed.config.auto_fill);
+        assert!(!ed.settings.auto_fill);
 
         ed.run_mx("toggle-truncate-lines");
-        assert!(!ed.config.truncate_lines);
+        assert!(!ed.settings.truncate_lines);
         assert!(!ed.view.truncate_lines);
         assert_eq!(ed.view.left, 0);
         ed.run_mx("toggle-truncate-lines");
-        assert!(ed.config.truncate_lines);
+        assert!(ed.settings.truncate_lines);
         assert!(ed.view.truncate_lines);
     }
 }

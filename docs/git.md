@@ -13,7 +13,8 @@ GIT_EDITOR=nemacs git commit                                   # one-off
 ## Commit workflow
 
 - `C-c C-c` saves the message and exits.
-- `C-c C-k` exits without saving; git aborts the commit.
+- `C-c C-k` exits without saving; git aborts the commit. A prompt appears
+  only when the message text has changed.
 - `C-x C-s` followed by `C-x C-c` also saves and exits.
 - `C-c C-c` asks for confirmation when the message is empty or contains only
   comments.
@@ -26,3 +27,5 @@ GIT_EDITOR=nemacs git commit                                   # one-off
   open in Git commit mode.
 - Set `comment_char` to match `core.commentChar` when it is not `#`. See
   [Configuration](configuration.md).
+- The prefix can also be set per language, for example
+  `[gitcommit] comment_start = ";"`.

@@ -42,6 +42,8 @@ words; affix expansions are not applied, so inflected forms may be flagged.
 
 - `spell_check = true` — enable spell checking at startup.
 - `spell_dictionary = /path/to/words` — use an explicit dictionary.
+- Both keys can be overridden in a language section, for example
+  `[markdown]` or `[latex]`. See [Configuration](configuration.md).
 - `NANO_EMACS_DICT=/path/to/words nemacs FILE` — one-off dictionary override.
 
 See [Configuration](configuration.md) for the rest of the options.

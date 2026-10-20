@@ -75,3 +75,13 @@ Syntax highlighting covers 39 languages and formats.
   separate languages.
 - Markdown fences are highlighted as strings; fenced code is not recursively
   parsed.
+
+## Per-language settings
+
+Each language can have its own configuration section, for example `[rust]`,
+`[python]`, or `[git-commit]`. Section names ignore case, spaces, hyphens, and
+underscores.
+
+Overridable keys include indentation, comment prefixes, completion, spelling,
+diagnostics, and the LSP command. See
+[Configuration](configuration.md#per-language-options) and [LSP](lsp.md).

@@ -11,7 +11,7 @@ minibuffer completion, and [Spelling](spelling.md) for spell checking.
 - `save-buffer` — save the current buffer.
 - `write-file` — write the buffer to a different file.
 - `revert-buffer` — reload the file from disk.
-- `kill-emacs` — quit, asking about unsaved changes.
+- `kill-emacs` — quit; ask only when the buffer text has changed.
 - `save-buffers-kill-terminal` — alias for `kill-emacs`.
 
 ## Editing
@@ -35,6 +35,9 @@ minibuffer completion, and [Spelling](spelling.md) for spell checking.
 - `toggle-editor-completion` — enable or disable editor completion.
 - `complete-symbol` — show completion candidates at point.
 - `completion-at-point` — alias for `complete-symbol`.
+- `comment-dwim` — comment or uncomment the current line or region.
+- `next-error` — jump to the next LSP diagnostic.
+- `previous-error` — jump to the previous LSP diagnostic.
 - `flyspell-mode` — enable or disable spell checking in prose modes.
 - `spell-check-mode` — alias for `flyspell-mode`.
 - `toggle-spell-check` — alias for `flyspell-mode`.
@@ -67,4 +70,5 @@ minibuffer completion, and [Spelling](spelling.md) for spell checking.
 
 - [Completion](completion.md) — minibuffer lists, candidate cycling, and optional editor completion.
 - [Spelling](spelling.md) — dictionary discovery, highlighting, and `M-$`.
+- [LSP](lsp.md) — language servers, diagnostics, and completion.
 - [Key bindings](keys.md) — every key, including region and search behaviour.

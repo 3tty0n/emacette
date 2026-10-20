@@ -135,6 +135,7 @@ pub struct Buffer {
     redo: Vec<UndoGroup>,
     group_start: Point,
     last_yank: Option<(Point, Point)>,
+    saved_text: String,
 }
 
 impl std::fmt::Debug for Buffer {
@@ -182,7 +183,7 @@ impl Buffer {
                 .map(|s| s.chars().collect())
                 .collect()
         };
-        Buffer {
+        let mut buffer = Buffer {
             lines,
             point: Point::default(),
             mark: None,
@@ -202,7 +203,10 @@ impl Buffer {
             redo: Vec::new(),
             group_start: Point::default(),
             last_yank: None,
-        }
+            saved_text: String::new(),
+        };
+        buffer.saved_text = buffer.render_text();
+        buffer
     }
 
     pub fn open(path: &Path) -> io::Result<Self> {
@@ -280,10 +284,17 @@ impl Buffer {
     }
 
     pub fn save_as(&mut self, path: &Path) -> io::Result<()> {
-        fs::write(path, self.render_text().as_bytes())?;
+        let text = self.render_text();
+        fs::write(path, text.as_bytes())?;
         self.path = Some(path.to_path_buf());
         self.modified = false;
+        self.saved_text = text;
         Ok(())
+    }
+
+    /// True when the buffer text differs from the last loaded/saved text.
+    pub fn has_unsaved_changes(&self) -> bool {
+        self.render_text() != self.saved_text
     }
 
     // ------------------------------------------------------------ movement
@@ -564,7 +575,7 @@ impl Buffer {
         self.point = clamp_point(point, &self.lines);
         self.goal_col = None;
         self.last_yank = None;
-        self.modified = true;
+        self.modified = self.render_text() != self.saved_text;
     }
 
     pub fn undo(&mut self) -> bool {
@@ -1000,7 +1011,7 @@ impl Buffer {
     }
 
     /// Number of lines that contain only whitespace or comments.
-    pub fn is_effectively_empty(&self, comment_prefix: char) -> bool {
+    pub fn is_effectively_empty(&self, comment_prefix: &str) -> bool {
         self.lines.iter().all(|line| {
             let trimmed: String = line
                 .iter()
@@ -1210,9 +1221,9 @@ mod tests {
     #[test]
     fn effectively_empty_ignores_comments() {
         let buf = buffer("# comment\n\n   \n# another\n");
-        assert!(buf.is_effectively_empty('#'));
+        assert!(buf.is_effectively_empty("#"));
         let buf = buffer("# comment\nsubject\n");
-        assert!(!buf.is_effectively_empty('#'));
+        assert!(!buf.is_effectively_empty("#"));
     }
 
     #[test]

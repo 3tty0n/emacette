@@ -98,6 +98,10 @@ pub struct Theme {
     pub completion: Style,
     pub completion_selected: Style,
     pub spell: Style,
+    pub diagnostic_error: Style,
+    pub diagnostic_warning: Style,
+    pub diagnostic_information: Style,
+    pub diagnostic_hint: Style,
 }
 
 impl Theme {
@@ -150,6 +154,10 @@ impl Theme {
             completion: Style::fg(250).with_bg(236),
             completion_selected: Style::fg(231).with_bg(60).bold(),
             spell: Style::fg(203).underline(),
+            diagnostic_error: Style::fg(203).underline(),
+            diagnostic_warning: Style::fg(221).underline(),
+            diagnostic_information: Style::fg(117).underline(),
+            diagnostic_hint: Style::fg(244).underline(),
         }
     }
 
@@ -191,6 +199,10 @@ impl Theme {
             completion: Style::fg(235).with_bg(253),
             completion_selected: Style::fg(16).with_bg(153).bold(),
             spell: Style::fg(160).underline(),
+            diagnostic_error: Style::fg(160).underline(),
+            diagnostic_warning: Style::fg(130).underline(),
+            diagnostic_information: Style::fg(25).underline(),
+            diagnostic_hint: Style::fg(240).underline(),
         }
     }
 }

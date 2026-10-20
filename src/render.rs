@@ -9,6 +9,7 @@ use std::fmt::Write as _;
 
 use crate::editor::Editor;
 use crate::help::{HelpLine, HELP};
+use crate::lsp::Severity;
 use crate::syntax::Span;
 use crate::theme::{Style, Theme};
 use crate::view::{
@@ -55,17 +56,19 @@ impl Renderer {
     pub fn render(&mut self, editor: &mut Editor, width: usize, height: usize) -> Frame {
         editor.view.width = width.max(1);
         editor.view.height = height.max(1);
-        editor.view.tab_width = editor.config.tab_width;
-        editor.view.line_numbers = editor.config.line_numbers;
-        editor.view.highlight_trailing_ws = editor.config.highlight_trailing_ws;
-        editor.view.truncate_lines = editor.config.truncate_lines;
-        let menu_rows = if editor.overlay.is_some() {
-            0
+        editor.view.tab_width = editor.settings.tab_width;
+        editor.view.line_numbers = editor.settings.line_numbers;
+        editor.view.highlight_trailing_ws = editor.settings.highlight_trailing_ws;
+        editor.view.truncate_lines = editor.settings.truncate_lines;
+        let (completion_rows, diagnostic_rows, menu_rows) = if editor.overlay.is_some() {
+            (0, 0, 0)
         } else {
-            editor
-                .completion_menu_count()
-                .min(6)
-                .min(editor.view.height.saturating_sub(3))
+            let completion = editor.completion_menu_count().min(6);
+            let diagnostics = editor.diagnostic_popup().len().min(4);
+            let menu = (completion + diagnostics).min(editor.view.height.saturating_sub(3));
+            let completion = completion.min(menu);
+            let diagnostics = diagnostics.min(menu - completion);
+            (completion, diagnostics, menu)
         };
         editor.view.menu_rows = menu_rows;
         editor.sync_highlighter();
@@ -89,7 +92,8 @@ impl Renderer {
             rows.extend(build_help_rows(editor, body_rows, overlay.scroll));
         } else {
             rows.extend(build_text_rows(editor, body_rows));
-            rows.extend(build_completion_rows(editor, menu_rows));
+            rows.extend(build_completion_rows(editor, completion_rows));
+            rows.extend(build_diagnostic_rows(editor, diagnostic_rows));
             cursor =
                 buffer_cursor(editor).filter(|&(_, y)| body_rows > 0 && y as usize <= body_rows);
         }
@@ -237,6 +241,7 @@ fn build_truncated_text_rows(editor: &mut Editor, body_rows: usize) -> Vec<Strin
             editor.highlighter.tokens(row, lines).to_vec()
         };
         let spell = editor.spell_spans(row);
+        let diagnostics = editor.diagnostic_ranges(row);
         let chars = &editor.buffer.lines[row];
 
         let region = editor.buffer.region().and_then(|(start, end)| {
@@ -272,6 +277,7 @@ fn build_truncated_text_rows(editor: &mut Editor, body_rows: usize) -> Vec<Strin
             search,
             highlight_trailing,
             &spell,
+            &diagnostics,
             0,
             chars.len(),
             0,
@@ -310,6 +316,7 @@ fn build_wrapped_text_rows(editor: &mut Editor, body_rows: usize) -> Vec<String>
             editor.highlighter.tokens(row, lines).to_vec()
         };
         let spell = editor.spell_spans(row);
+        let diagnostics = editor.diagnostic_ranges(row);
         let chars = &editor.buffer.lines[row];
         if start_idx > chars.len() {
             start_idx = chars.len();
@@ -364,6 +371,7 @@ fn build_wrapped_text_rows(editor: &mut Editor, body_rows: usize) -> Vec<String>
             search,
             highlight_trailing,
             &spell,
+            &diagnostics,
             start_idx,
             end_idx,
             start_display,
@@ -397,6 +405,7 @@ fn draw_line(
     search: Option<(usize, usize)>,
     highlight_trailing: bool,
     spell: &[(usize, usize)],
+    diagnostics: &[(usize, usize, Severity)],
     start_idx: usize,
     end_idx: usize,
     start_display: usize,
@@ -430,6 +439,7 @@ fn draw_line(
     let mut emitted = 0usize;
     let mut span_idx = 0usize;
     let mut spell_idx = 0usize;
+    let mut diagnostic_idx = 0usize;
     let mut current = theme.text;
     let mut styled = false;
 
@@ -457,6 +467,25 @@ fn draw_line(
         {
             style.underline = true;
             if let Some(fg) = theme.spell.fg {
+                style.fg = Some(fg);
+            }
+        }
+
+        while diagnostic_idx < diagnostics.len() && diagnostics[diagnostic_idx].1 <= idx {
+            diagnostic_idx += 1;
+        }
+        if let Some((_, _, severity)) = diagnostics
+            .get(diagnostic_idx)
+            .filter(|(start, _, _)| *start <= idx)
+        {
+            let diagnostic = match severity {
+                Severity::Error => theme.diagnostic_error,
+                Severity::Warning => theme.diagnostic_warning,
+                Severity::Information => theme.diagnostic_information,
+                Severity::Hint => theme.diagnostic_hint,
+            };
+            style.underline = diagnostic.underline;
+            if let Some(fg) = diagnostic.fg {
                 style.fg = Some(fg);
             }
         }
@@ -573,6 +602,49 @@ fn buffer_cursor(editor: &Editor) -> Option<(u16, u16)> {
     Some((x as u16, screen as u16 + 1))
 }
 
+fn build_diagnostic_rows(editor: &Editor, rows: usize) -> Vec<String> {
+    if rows == 0 {
+        return Vec::new();
+    }
+    let diagnostics = editor.diagnostic_popup();
+    if diagnostics.is_empty() {
+        return Vec::new();
+    }
+    let theme = editor.theme.clone();
+    let width = editor.view.width;
+    let mut out = Vec::with_capacity(rows);
+    for diagnostic in diagnostics.into_iter().take(rows) {
+        let marker = match diagnostic.severity {
+            Severity::Error => "E",
+            Severity::Warning => "W",
+            Severity::Information => "I",
+            Severity::Hint => "H",
+        };
+        let mut text = format!(" {marker}: {}", diagnostic.message);
+        if let Some(source) = &diagnostic.source {
+            text.push_str(&format!(" [{source}]"));
+        }
+        let mut style = match diagnostic.severity {
+            Severity::Error => theme.diagnostic_error,
+            Severity::Warning => theme.diagnostic_warning,
+            Severity::Information => theme.diagnostic_information,
+            Severity::Hint => theme.diagnostic_hint,
+        };
+        style.bg = theme.completion.bg;
+        let mut line = String::new();
+        push_style(&mut line, style);
+        let text = truncate_to_width(&text, width);
+        let used = str_width(&text);
+        line.push_str(&text);
+        if used < width {
+            line.push_str(&" ".repeat(width - used));
+        }
+        line.push_str("\x1b[0m\x1b[K");
+        out.push(line);
+    }
+    out
+}
+
 fn build_modeline(editor: &Editor) -> String {
     let width = editor.view.width;
     let name = editor.buffer.display_name();
@@ -592,17 +664,20 @@ fn build_modeline(editor: &Editor) -> String {
     let mode = editor.mode.name();
     let eol = editor.buffer.line_ending.name();
     let mut flags = String::new();
-    if editor.config.auto_fill {
+    if editor.settings.auto_fill {
         flags.push_str("Fill ");
     }
-    if !editor.config.truncate_lines {
+    if !editor.settings.truncate_lines {
         flags.push_str("Wrap ");
     }
-    if editor.config.editor_completion {
+    if editor.settings.editor_completion {
         flags.push_str("Comp ");
     }
     if editor.spell.enabled && editor.mode.is_prose() {
         flags.push_str("Spell ");
+    }
+    if editor.lsp.is_some() {
+        flags.push_str("LSP ");
     }
 
     let full_left = format!(" nemacs  {name} {star}  {position}");
@@ -884,6 +959,7 @@ mod tests {
     use crate::config::Config;
     use crate::editor::Editor;
     use crate::key::{Key, KeyCode};
+    use crate::lsp::Diagnostic;
 
     use super::*;
 
@@ -935,6 +1011,16 @@ mod tests {
     }
 
     #[test]
+    fn m_x_menu_appears_without_pressing_tab() {
+        let mut ed = Editor::from_text("", None, Config::default());
+        ed.handle_key(Key::alt('x'));
+        let frame = render(&mut ed, 60, 10);
+        let plain = strip_ansi(&frame.output);
+        assert!(ed.view.menu_rows > 0);
+        assert!(plain.contains("save-buffer"));
+    }
+
+    #[test]
     fn minibuffer_completion_menu_renders_candidates() {
         let mut ed = Editor::from_text("", None, Config::default());
         ed.handle_key(Key::alt('x'));
@@ -983,6 +1069,30 @@ mod tests {
         assert!(frame.output.contains(";4;38;5;203"));
         assert!(strip_ansi(&frame.output).contains("Spell"));
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn diagnostics_render_inline_and_in_a_popup() {
+        let mut ed = Editor::from_text("hello\n", None, Config::default());
+        ed.diagnostics = vec![Diagnostic {
+            row: 0,
+            start: 0,
+            end: 5,
+            severity: Severity::Error,
+            message: "bad thing".into(),
+            source: Some("test".into()),
+        }];
+        let frame = render(&mut ed, 50, 8);
+        let plain = strip_ansi(&frame.output);
+        assert!(frame.output.contains(";4;38;5;203"));
+        assert!(plain.contains("E: bad thing [test]"));
+        assert_eq!(ed.view.menu_rows, 1);
+
+        ed.settings.diagnostics_popup = false;
+        ed.needs_redraw = true;
+        let frame = render(&mut ed, 50, 8);
+        assert!(!strip_ansi(&frame.output).contains("E: bad thing"));
+        assert_eq!(ed.view.menu_rows, 0);
     }
 
     #[test]

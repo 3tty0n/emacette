@@ -4,17 +4,21 @@ Part of [nano-emacs](../README.md).
 
 ## Minibuffer completion
 
-`TAB` completes in `M-x`, `find-file`, and `write-file`. A completion menu
-lists the candidates above the mode line.
+`M-x`, `find-file`, and `write-file` open with their candidates already listed
+above the mode line. The list updates while you type.
 
-- The first `TAB` extends the input to the longest common prefix.
-- If several candidates remain, the echo area shows their count and the menu
-  shows the list.
-- The next `TAB` selects the first candidate.
-- Further `TAB` presses cycle forward; `S-TAB` cycles backward.
-- Editing, deleting, or moving the cursor resets the cycle.
+- Opening a prompt lists all matching candidates immediately.
+- `TAB` selects the first candidate, then cycles forward; `S-TAB` cycles
+  backward.
+- `C-n` / `C-p` (and `Down` / `Up`) select the next / previous candidate
+  while the menu is open.
+- `M-n` / `M-p` move through minibuffer history.
+- If no menu is open, `TAB` extends the input to the longest common prefix.
+- Editing, deleting, or moving the cursor resets the cycle and refreshes the
+  list.
 - `RET` accepts the current input.
-- A unique candidate is inserted immediately.
+- A unique candidate is selected with `TAB`, but opening a prompt does not
+  insert it automatically.
 
 ### Path completion
 
@@ -45,8 +49,15 @@ Editor completion is optional and off by default.
 - After two word characters, a candidate menu appears automatically.
 - `M-x complete-symbol` opens the menu manually at any prefix length.
 - Candidates come from words and `\commands` in the current buffer.
-- The prefix is matched case-sensitively.
-- Up to 100 candidates are kept.
+- If an LSP server is configured for the language, `M-x complete-symbol`
+  requests server completions as well. See [LSP](lsp.md).
+- LSP requests are also sent while typing when `editor_completion = true`.
+- Buffer-word candidates appear immediately; LSP results replace the menu when
+  they arrive.
+- A manual LSP request works with an empty prefix, so member completion after
+  `.` can use the server.
+- The local prefix is matched case-sensitively.
+- Up to 100 local candidates and 200 LSP candidates are kept.
 
 Keys while the editor menu is open:
 
@@ -64,4 +75,9 @@ The mode line shows `Comp` while editor completion is enabled.
 
 - `editor_completion` — enable automatic editor completion; default `false`.
   Set it in the configuration file or toggle it with
-  `M-x toggle-editor-completion`.
+  `M-x toggle-editor-completion`. The value can be overridden per language.
+- `lsp_command` — optional language-server command for LSP completion; see
+  [LSP](lsp.md).
+
+See [Configuration](configuration.md) for language sections such as
+`[rust]` and `[markdown]`.

@@ -58,3 +58,17 @@ paths listed in [Spelling](spelling.md) work.
 - Install a system dictionary such as `hunspell-en_US` or a `words` package.
 - Or set `spell_dictionary` in the configuration.
 - Or set `NANO_EMACS_DICT` for one run.
+
+## Optional language servers
+
+LSP support is opt-in. Install a server separately and configure
+`lsp_command` in the relevant language section.
+
+- Rust: `rust-analyzer`
+- Python: `pyright-langserver` or `pylsp`
+- C/C++: `clangd`
+- Go: `gopls`
+- TypeScript/JavaScript: `typescript-language-server`
+- Markdown: `marksman`
+
+See [LSP](lsp.md) for commands, diagnostics, and completion.
