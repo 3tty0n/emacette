@@ -71,6 +71,13 @@ impl Renderer {
             (completion, diagnostics, menu)
         };
         editor.view.menu_rows = menu_rows;
+        let tab_rows =
+            if editor.tab_count() > 1 && editor.overlay.is_none() && editor.view.height >= 4 {
+                1
+            } else {
+                0
+            };
+        editor.view.tab_rows = tab_rows;
         editor.sync_highlighter();
         editor.view.ensure_visible(&editor.buffer);
 
@@ -84,18 +91,23 @@ impl Renderer {
         // terminal with fewer than three rows there is no text area.
         let body_rows = terminal_height
             .saturating_sub(2)
-            .saturating_sub(editor.view.menu_rows);
+            .saturating_sub(editor.view.menu_rows)
+            .saturating_sub(tab_rows);
 
         let mut rows: Vec<String> = Vec::with_capacity(terminal_height);
         let mut cursor = None;
+        if tab_rows > 0 {
+            rows.push(build_tab_bar(editor));
+        }
         if let Some(overlay) = editor.overlay {
             rows.extend(build_help_rows(editor, body_rows, overlay.scroll));
         } else {
             rows.extend(build_text_rows(editor, body_rows));
             rows.extend(build_completion_rows(editor, completion_rows));
             rows.extend(build_diagnostic_rows(editor, diagnostic_rows));
-            cursor =
-                buffer_cursor(editor).filter(|&(_, y)| body_rows > 0 && y as usize <= body_rows);
+            cursor = buffer_cursor(editor)
+                .filter(|&(_, y)| body_rows > 0 && y as usize <= body_rows)
+                .map(|(x, y)| (x, y + tab_rows as u16));
         }
         if terminal_height >= 2 {
             rows.push(build_modeline(editor));
@@ -645,6 +657,59 @@ fn build_diagnostic_rows(editor: &Editor, rows: usize) -> Vec<String> {
     out
 }
 
+fn build_tab_bar(editor: &Editor) -> String {
+    let width = editor.view.width;
+    let labels = editor.tab_labels();
+    let theme = editor.theme.clone();
+    let active = labels
+        .iter()
+        .position(|(_, is_active)| *is_active)
+        .unwrap_or(0);
+    let total: usize = labels.iter().map(|(title, _)| str_width(title) + 2).sum();
+    let start = if total <= width {
+        0
+    } else {
+        active.saturating_sub(1)
+    };
+
+    let mut line = String::new();
+    let mut used = 0usize;
+    if start > 0 {
+        push_style(&mut line, theme.tab_bar);
+        line.push_str("… ");
+        used = 2;
+    }
+    for (title, is_active) in labels.iter().skip(start) {
+        let text = format!(" {title} ");
+        let text_width = str_width(&text);
+        if used + text_width > width {
+            if *is_active && used < width {
+                push_style(&mut line, theme.tab_active);
+                let clipped = truncate_to_width(&text, width - used);
+                used += str_width(&clipped);
+                line.push_str(&clipped);
+            }
+            break;
+        }
+        push_style(
+            &mut line,
+            if *is_active {
+                theme.tab_active
+            } else {
+                theme.tab_bar
+            },
+        );
+        line.push_str(&text);
+        used += text_width;
+    }
+    if used < width {
+        push_style(&mut line, theme.tab_bar);
+        line.push_str(&" ".repeat(width - used));
+    }
+    line.push_str("\x1b[0m\x1b[K");
+    line
+}
+
 fn build_modeline(editor: &Editor) -> String {
     let width = editor.view.width;
     let name = editor.buffer.display_name();
@@ -680,7 +745,7 @@ fn build_modeline(editor: &Editor) -> String {
         flags.push_str("LSP ");
     }
 
-    let full_left = format!(" nemacs  {name} {star}  {position}");
+    let full_left = format!(" emacette  {name} {star}  {position}");
     let full_right = format!("{percent}  {flags}{mode}  {eol} ");
     let line = if fits(&full_left, &full_right, width) {
         layout_modeline(&full_left, &full_right, width)
@@ -967,7 +1032,7 @@ mod tests {
         static COUNTER: AtomicUsize = AtomicUsize::new(0);
         let n = COUNTER.fetch_add(1, Ordering::SeqCst);
         let dir =
-            std::env::temp_dir().join(format!("nano-emacs-render-{}-{}", std::process::id(), n));
+            std::env::temp_dir().join(format!("emacette-render-{}-{}", std::process::id(), n));
         std::fs::create_dir_all(&dir).unwrap();
         let dictionary = dir.join("words");
         std::fs::write(&dictionary, words).unwrap();
@@ -1008,6 +1073,30 @@ mod tests {
         assert!(plain.contains("sample.rs"));
         assert!(plain.contains("Rust"));
         assert!(frame.cursor.is_some());
+    }
+
+    #[test]
+    fn tab_bar_renders_when_multiple_tabs_are_open() {
+        let (dir, _) = temp_dictionary("hello\n");
+        let path = dir.join("one.txt");
+        std::fs::write(&path, "one\n").unwrap();
+        let mut ed = Editor::open(Some(path), Config::default()).unwrap();
+        ed.handle_key(Key::ctrl('x'));
+        ed.handle_key(Key::ch('t'));
+        ed.handle_key(Key::ch('2'));
+        let frame = render(&mut ed, 60, 10);
+        let plain = strip_ansi(&frame.output);
+        assert_eq!(ed.view.tab_rows, 1);
+        assert!(plain.contains("one.txt"));
+        assert!(plain.contains("*scratch*"));
+
+        ed.handle_key(Key::ctrl('x'));
+        ed.handle_key(Key::ch('t'));
+        ed.handle_key(Key::ch('k'));
+        let frame = render(&mut ed, 60, 10);
+        assert_eq!(ed.view.tab_rows, 0);
+        assert!(strip_ansi(&frame.output).contains("one.txt"));
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
@@ -1135,7 +1224,7 @@ mod tests {
         let mut ed = Editor::from_text("", None, Config::default());
         ed.overlay = Some(crate::editor::Overlay { scroll: 0 });
         let frame = render(&mut ed, 70, 20);
-        assert!(strip_ansi(&frame.output).contains("nano-emacs"));
+        assert!(strip_ansi(&frame.output).contains("emacette"));
         assert!(frame.cursor.is_none());
     }
 

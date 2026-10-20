@@ -8,17 +8,22 @@ pub enum HelpLine {
 }
 
 pub static HELP: &[HelpLine] = &[
-    HelpLine::Heading("nano-emacs - a tiny Emacs-flavoured editor"),
+    HelpLine::Heading("emacette - a tiny Emacs-flavoured editor"),
     HelpLine::Blank,
     HelpLine::Text("F1 / q / C-g close this help.  C-n, C-p, SPC scroll."),
     HelpLine::Blank,
     HelpLine::Heading("Files and git"),
     HelpLine::Key("C-x C-s", "save buffer"),
     HelpLine::Key("C-x C-w", "write buffer to a file (save as)"),
-    HelpLine::Key("C-x C-f", "find file"),
+    HelpLine::Key("C-x C-f", "find file (new tab)"),
     HelpLine::Key("C-x C-c", "quit (prompts only when changed)"),
     HelpLine::Key("C-c C-c", "save and quit (finish a git commit)"),
     HelpLine::Key("C-c C-k", "abort a git commit without saving"),
+    HelpLine::Blank,
+    HelpLine::Heading("Tabs"),
+    HelpLine::Key("C-x t n  C-x t p", "next / previous tab"),
+    HelpLine::Key("C-x t 2  C-x t k", "new / close tab"),
+    HelpLine::Key("M-<right> M-<left>", "next / previous tab"),
     HelpLine::Blank,
     HelpLine::Heading("Moving"),
     HelpLine::Key("C-f  C-b", "forward / backward one character"),
@@ -74,7 +79,7 @@ pub static HELP: &[HelpLine] = &[
     HelpLine::Text("Alt (Meta) works as ESC followed by the key."),
     HelpLine::Text("M-x auto-fill-mode / toggle-truncate-lines"),
     HelpLine::Text("M-x kill-region, kill-ring-save, delete-region"),
-    HelpLine::Text("Configuration: ~/.config/nano-emacs/config"),
+    HelpLine::Text("Configuration: ~/.config/emacette/config"),
     HelpLine::Text("  Global keys plus sections such as [rust] and [markdown]."),
 ];
 

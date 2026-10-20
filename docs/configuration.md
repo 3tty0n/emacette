@@ -1,10 +1,16 @@
 # Configuration
 
-Part of [nano-emacs](../README.md).
+Part of [emacette](../README.md).
 
 ## Location
 
 The first existing file is used:
+
+- `$EMACETTE_CONFIG`
+- `$XDG_CONFIG_HOME/emacette/config`
+- `~/.config/emacette/config`
+
+For migration, these are used only when the new path does not exist:
 
 - `$NANO_EMACS_CONFIG`
 - `$XDG_CONFIG_HOME/nano-emacs/config`
@@ -33,7 +39,7 @@ fill_column = 70
 truncate_lines = true        # false = soft-wrap long lines
 editor_completion = false
 spell_check = false
-# spell_dictionary = ~/.config/nano-emacs/en.dic
+# spell_dictionary = ~/.config/emacette/en.dic
 diagnostics_inline = true
 diagnostics_popup = true
 theme = dark                 # dark or light

@@ -1,6 +1,6 @@
 # Languages
 
-Part of [nano-emacs](../README.md).
+Part of [emacette](../README.md).
 
 Syntax highlighting covers 39 languages and formats.
 

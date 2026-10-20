@@ -2,7 +2,7 @@ PREFIX ?= $(HOME)/.local
 BINDIR ?= $(PREFIX)/bin
 CARGO ?= cargo
 PYTHON ?= python3
-BIN := target/release/nemacs
+BIN := target/release/emacette
 
 .PHONY: all build test check fmt e2e bench install uninstall clean release
 
@@ -32,10 +32,10 @@ release:
 
 install: build
 	mkdir -p $(DESTDIR)$(BINDIR)
-	install -m 755 $(BIN) $(DESTDIR)$(BINDIR)/nemacs
+	install -m 755 $(BIN) $(DESTDIR)$(BINDIR)/emacette
 
 uninstall:
-	rm -f $(DESTDIR)$(BINDIR)/nemacs
+	rm -f $(DESTDIR)$(BINDIR)/emacette
 
 clean:
 	$(CARGO) clean

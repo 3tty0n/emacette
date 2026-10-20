@@ -1,8 +1,8 @@
 # Language servers (LSP)
 
-Part of [nano-emacs](../README.md).
+Part of [emacette](../README.md).
 
-`nemacs` can talk to a language server over stdio. Configuration is per
+`emacette` can talk to a language server over stdio. Configuration is per
 language; nothing is started unless `lsp_command` is set.
 
 ## Example

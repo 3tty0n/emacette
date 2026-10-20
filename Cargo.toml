@@ -1,5 +1,5 @@
 [package]
-name = "nano-emacs"
+name = "emacette"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.74"
@@ -10,11 +10,11 @@ keywords = ["editor", "emacs", "terminal", "tui"]
 categories = ["command-line-utilities"]
 
 [lib]
-name = "nano_emacs"
+name = "emacette"
 path = "src/lib.rs"
 
 [[bin]]
-name = "nemacs"
+name = "emacette"
 path = "src/main.rs"
 
 [dependencies]

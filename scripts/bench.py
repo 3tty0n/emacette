@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Measure time-to-first-paint for nemacs and friends.
+"""Measure time-to-first-paint for emacette and friends.
 
 This is a deliberately simple benchmark: spawn the editor on a pty, measure
 how long it takes to write its first byte, then kill it.  It captures the
@@ -26,7 +26,7 @@ RUNS = 9
 def parse_args():
     global RUNS
     args = sys.argv[1:]
-    binary = os.path.join(ROOT, "target", "release", "nemacs")
+    binary = os.path.join(ROOT, "target", "release", "emacette")
     while args:
         arg = args.pop(0)
         if arg in ("-n", "--runs"):
@@ -40,7 +40,7 @@ def parse_args():
 
 
 def sample_file():
-    directory = tempfile.mkdtemp(prefix="nano-emacs-bench-")
+    directory = tempfile.mkdtemp(prefix="emacette-bench-")
     path = os.path.join(directory, "sample.rs")
     lines = ["// benchmark sample", "fn main() {"]
     for i in range(40):
@@ -78,7 +78,7 @@ def main():
     print(f"sample: {sample} (44 lines)")
     print()
     try:
-        measure("nemacs", [binary, sample])
+        measure("emacette", [binary, sample])
         for label, command in [
             ("nano", ["nano", sample]),
             ("vim", ["vim", "-u", "NONE", "-n", sample]),

@@ -38,6 +38,10 @@ pub enum Cmd {
     CommentDwm,
     NextError,
     PreviousError,
+    TabNext,
+    TabPrevious,
+    TabNew,
+    TabClose,
     SpellWord,
     NextSpellingError,
     PreviousSpellingError,
@@ -78,6 +82,10 @@ pub const COMMANDS: &[(&str, Cmd)] = &[
     ("comment-dwim", Cmd::CommentDwm),
     ("next-error", Cmd::NextError),
     ("previous-error", Cmd::PreviousError),
+    ("tab-next", Cmd::TabNext),
+    ("tab-previous", Cmd::TabPrevious),
+    ("tab-new", Cmd::TabNew),
+    ("tab-close", Cmd::TabClose),
     ("flyspell-mode", Cmd::ToggleSpellCheck),
     ("spell-check-mode", Cmd::ToggleSpellCheck),
     ("toggle-spell-check", Cmd::ToggleSpellCheck),
@@ -111,6 +119,7 @@ pub const COMMANDS: &[(&str, Cmd)] = &[
 enum Prefix {
     Cx,
     Cc,
+    CxT,
     MetaG,
 }
 
@@ -131,6 +140,19 @@ struct Confirm {
 #[derive(Clone, Copy, Debug)]
 pub struct Overlay {
     pub scroll: usize,
+}
+
+struct TabState {
+    buffer: Option<Buffer>,
+    top: usize,
+    top_offset: usize,
+    left: usize,
+    lsp: Option<LspClient>,
+    diagnostics: Vec<Diagnostic>,
+    last_lsp_version: u64,
+    settings: Settings,
+    mode: Lang,
+    spell: SpellState,
 }
 
 #[derive(Clone, Debug)]
@@ -158,6 +180,8 @@ pub struct Editor {
     pub diagnostics: Vec<Diagnostic>,
     lsp_completion: Option<LspCompletionContext>,
     last_lsp_version: u64,
+    tabs: Vec<TabState>,
+    active_tab: usize,
     confirm: Option<Confirm>,
     pub overlay: Option<Overlay>,
     pub message: String,
@@ -228,7 +252,7 @@ impl Editor {
             theme,
             view,
             config,
-            settings,
+            settings: settings.clone(),
             highlighter: Highlighter::new(mode, version),
             minibuffer: None,
             search: None,
@@ -239,6 +263,19 @@ impl Editor {
             diagnostics: Vec::new(),
             lsp_completion: None,
             last_lsp_version: version,
+            tabs: vec![TabState {
+                buffer: None,
+                top: 0,
+                top_offset: 0,
+                left: 0,
+                lsp: None,
+                diagnostics: Vec::new(),
+                last_lsp_version: version,
+                settings: settings.clone(),
+                mode,
+                spell: SpellState::default(),
+            }],
+            active_tab: 0,
             confirm: None,
             overlay: None,
             message: String::new(),
@@ -323,6 +360,223 @@ impl Editor {
         self.start_lsp();
         self.prefix = None;
         self.needs_redraw = true;
+    }
+
+    // --------------------------------------------------------------- tabs
+
+    pub fn tab_count(&self) -> usize {
+        self.tabs.len()
+    }
+
+    fn first_unsaved_other_tab(&self) -> Option<usize> {
+        self.tabs
+            .iter()
+            .enumerate()
+            .find(|(index, tab)| {
+                *index != self.active_tab
+                    && tab.buffer.as_ref().is_some_and(Buffer::has_unsaved_changes)
+            })
+            .map(|(index, _)| index)
+    }
+
+    pub fn tab_labels(&self) -> Vec<(String, bool)> {
+        (0..self.tabs.len())
+            .map(|index| {
+                let buffer = if index == self.active_tab {
+                    Some(&self.buffer)
+                } else {
+                    self.tabs[index].buffer.as_ref()
+                };
+                let name = buffer
+                    .map(Buffer::display_name)
+                    .unwrap_or_else(|| "*scratch*".to_string());
+                let star = if buffer.is_some_and(|buffer| buffer.modified) {
+                    "*"
+                } else {
+                    ""
+                };
+                (format!("{name}{star}"), index == self.active_tab)
+            })
+            .collect()
+    }
+
+    fn stash_active_tab(&mut self) {
+        let active = self.active_tab;
+        let tab = &mut self.tabs[active];
+        tab.buffer = Some(std::mem::take(&mut self.buffer));
+        tab.top = self.view.top;
+        tab.top_offset = self.view.top_offset;
+        tab.left = self.view.left;
+        tab.lsp = self.lsp.take();
+        tab.diagnostics = std::mem::take(&mut self.diagnostics);
+        tab.last_lsp_version = self.last_lsp_version;
+        tab.settings = self.settings.clone();
+        tab.mode = self.mode;
+        tab.spell = std::mem::take(&mut self.spell);
+    }
+
+    /// Load `active_tab`, whose saved buffer must be present.
+    fn load_active_tab(&mut self) {
+        let active = self.active_tab;
+        let (buffer, top, top_offset, left, lsp, diagnostics, last_version, settings, mode, spell) = {
+            let tab = &mut self.tabs[active];
+            (
+                tab.buffer.take().expect("active tab has no buffer"),
+                tab.top,
+                tab.top_offset,
+                tab.left,
+                tab.lsp.take(),
+                std::mem::take(&mut tab.diagnostics),
+                tab.last_lsp_version,
+                tab.settings.clone(),
+                tab.mode,
+                std::mem::take(&mut tab.spell),
+            )
+        };
+        self.buffer = buffer;
+        self.mode = mode;
+        self.settings = settings;
+        self.view.top = top;
+        self.view.top_offset = top_offset;
+        self.view.left = left;
+        self.highlighter = Highlighter::new(mode, self.buffer.version);
+        self.apply_settings();
+        self.lsp = lsp;
+        self.diagnostics = diagnostics;
+        self.last_lsp_version = last_version;
+        self.spell = spell;
+        self.lsp_completion = None;
+        self.editor_completion = None;
+        self.word_cache = None;
+        self.search = None;
+        self.minibuffer = None;
+        self.confirm = None;
+        self.prefix = None;
+        self.needs_redraw = true;
+        if self.lsp.is_none() {
+            self.start_lsp();
+        }
+        if self.settings.spell_check && !self.spell.enabled {
+            self.configure_spell();
+        }
+    }
+
+    fn switch_to_tab(&mut self, index: usize) {
+        if index == self.active_tab || index >= self.tabs.len() {
+            return;
+        }
+        self.stash_active_tab();
+        self.active_tab = index;
+        self.load_active_tab();
+        self.message = format!("Tab: {}", self.buffer.display_name());
+    }
+
+    fn switch_tab(&mut self, delta: isize) {
+        if self.tabs.len() <= 1 {
+            self.message = "Only one tab".into();
+            return;
+        }
+        let len = self.tabs.len() as isize;
+        let index = (self.active_tab as isize + delta).rem_euclid(len) as usize;
+        self.switch_to_tab(index);
+    }
+
+    fn new_tab(&mut self) {
+        let buffer = Buffer::new();
+        let version = buffer.version;
+        let mode = Lang::Plain;
+        let settings = self.config.settings_for(mode);
+        self.stash_active_tab();
+        self.tabs.push(TabState {
+            buffer: Some(buffer),
+            top: 0,
+            top_offset: 0,
+            left: 0,
+            lsp: None,
+            diagnostics: Vec::new(),
+            last_lsp_version: version,
+            settings,
+            mode,
+            spell: SpellState::default(),
+        });
+        self.active_tab = self.tabs.len() - 1;
+        self.load_active_tab();
+        self.message = "New tab".into();
+    }
+
+    fn close_tab(&mut self) {
+        if self.buffer.has_unsaved_changes() {
+            self.message = "Tab modified: save it first".into();
+            return;
+        }
+        if self.tabs.len() == 1 {
+            self.finish_quit(0);
+            return;
+        }
+        let index = self.active_tab;
+        self.lsp = None;
+        self.diagnostics.clear();
+        self.lsp_completion = None;
+        self.spell = SpellState::default();
+        self.tabs.remove(index);
+        self.active_tab = index.min(self.tabs.len() - 1);
+        self.buffer = Buffer::new();
+        self.load_active_tab();
+        self.message = "Closed tab".into();
+    }
+
+    fn open_in_tab(&mut self, buffer: Buffer, new_file: bool) {
+        let name = buffer.display_name();
+        let lines = buffer.line_count();
+        if let Some(path) = buffer.path.as_deref() {
+            if self.buffer.path.as_deref() == Some(path) {
+                self.message = format!("Already open: {name}");
+                return;
+            }
+            if let Some(index) = self.tabs.iter().position(|tab| {
+                tab.buffer
+                    .as_ref()
+                    .and_then(|buffer| buffer.path.as_deref())
+                    == Some(path)
+            }) {
+                self.switch_to_tab(index);
+                self.message = format!("Switched to tab: {name}");
+                return;
+            }
+        }
+        let reuse_scratch = self.buffer.path.is_none() && !self.buffer.has_unsaved_changes();
+        if reuse_scratch {
+            self.set_buffer(buffer);
+        } else {
+            let version = buffer.version;
+            let first_line: String = buffer
+                .lines
+                .first()
+                .map(|line| line.iter().copied().collect())
+                .unwrap_or_default();
+            let mode = Lang::detect(buffer.path.as_deref(), Some(&first_line));
+            let settings = self.config.settings_for(mode);
+            self.stash_active_tab();
+            self.tabs.push(TabState {
+                buffer: Some(buffer),
+                top: 0,
+                top_offset: 0,
+                left: 0,
+                lsp: None,
+                diagnostics: Vec::new(),
+                last_lsp_version: version,
+                settings,
+                mode,
+                spell: SpellState::default(),
+            });
+            self.active_tab = self.tabs.len() - 1;
+            self.load_active_tab();
+        }
+        self.message = if new_file {
+            format!("(New file) {name}")
+        } else {
+            format!("Opened {name} ({lines} lines)")
+        };
     }
 
     // ---------------------------------------------------------- key input
@@ -893,6 +1147,8 @@ impl Editor {
                 self.meta_prefix = true;
                 self.message = "M-".into();
             }
+            KeyCode::Left if key.alt => self.switch_tab(-1),
+            KeyCode::Right if key.alt => self.switch_tab(1),
             KeyCode::Left => self.buffer.move_left(),
             KeyCode::Right => self.buffer.move_right(),
             KeyCode::Up => self.buffer.move_vertical(-1),
@@ -1036,6 +1292,10 @@ impl Editor {
                     self.buffer.mark_whole_buffer();
                     self.message = "Mark set".into();
                 }
+                KeyCode::Char('t') if !key.ctrl && !key.alt => {
+                    self.prefix = Some(Prefix::CxT);
+                    self.message = "C-x t-".into();
+                }
                 KeyCode::Char('s') => self.save_buffer(),
                 _ => self.message = format!("C-x {} is unbound", key.display()),
             },
@@ -1043,6 +1303,15 @@ impl Editor {
                 KeyCode::Char('c') if key.ctrl => self.save_and_quit(),
                 KeyCode::Char('k') if key.ctrl => self.abort_commit(),
                 _ => self.message = format!("C-c {} is unbound", key.display()),
+            },
+            Prefix::CxT => match key.code {
+                KeyCode::Char('n') if !key.alt || key.ctrl => self.switch_tab(1),
+                KeyCode::Char('p') if !key.alt || key.ctrl => self.switch_tab(-1),
+                KeyCode::Char('o') if !key.ctrl && !key.alt => self.switch_tab(1),
+                KeyCode::Char('2') if !key.ctrl && !key.alt => self.new_tab(),
+                KeyCode::Char('k') if !key.ctrl && !key.alt => self.close_tab(),
+                KeyCode::Char('f') if !key.ctrl && !key.alt => self.prompt_find_file(),
+                _ => self.message = format!("C-x t {} is unbound", key.display()),
             },
             Prefix::MetaG => match key.code {
                 KeyCode::Char('g') if !key.ctrl && !key.alt => self.prompt_goto_line(),
@@ -1329,7 +1598,16 @@ impl Editor {
     }
 
     fn quit_request(&mut self) {
-        if !self.buffer.has_unsaved_changes() || !self.config.confirm_on_quit {
+        if !self.config.confirm_on_quit {
+            self.finish_quit(0);
+            return;
+        }
+        if let Some(index) = self.first_unsaved_other_tab() {
+            self.switch_to_tab(index);
+            self.message = "Other tabs have unsaved changes; save them first".into();
+            return;
+        }
+        if !self.buffer.has_unsaved_changes() {
             self.finish_quit(0);
             return;
         }
@@ -2086,22 +2364,11 @@ impl Editor {
             self.message = format!("{} is a directory", path.display());
             return;
         }
-        if self.buffer.has_unsaved_changes() {
-            self.message = "Buffer modified: save it first (C-x C-s)".into();
-            return;
-        }
         match Buffer::open(&path) {
-            Ok(buffer) => {
-                let name = buffer.display_name();
-                let lines = buffer.line_count();
-                self.set_buffer(buffer);
-                self.message = format!("Opened {name} ({lines} lines)");
-            }
+            Ok(buffer) => self.open_in_tab(buffer, false),
             Err(e) if e.kind() == io::ErrorKind::NotFound => {
-                let mut buffer = Buffer::from_text("", Some(path.clone()));
-                buffer.modified = false;
-                self.set_buffer(buffer);
-                self.message = format!("(New file) {}", path.display());
+                let buffer = Buffer::from_text("", Some(path.clone()));
+                self.open_in_tab(buffer, true);
             }
             Err(e) => self.message = format!("Cannot open {}: {e}", path.display()),
         }
@@ -2210,6 +2477,10 @@ impl Editor {
             Cmd::CommentDwm => self.comment_dwim(),
             Cmd::NextError => self.next_diagnostic(true),
             Cmd::PreviousError => self.next_diagnostic(false),
+            Cmd::TabNext => self.switch_tab(1),
+            Cmd::TabPrevious => self.switch_tab(-1),
+            Cmd::TabNew => self.new_tab(),
+            Cmd::TabClose => self.close_tab(),
             Cmd::SpellWord => self.spell_word(),
             Cmd::NextSpellingError => self.next_spelling_error(true),
             Cmd::PreviousSpellingError => self.next_spelling_error(false),
@@ -2399,11 +2670,8 @@ mod tests {
     fn temp_dir() -> PathBuf {
         static COUNTER: AtomicUsize = AtomicUsize::new(0);
         let n = COUNTER.fetch_add(1, Ordering::SeqCst);
-        let dir = std::env::temp_dir().join(format!(
-            "nano-emacs-completion-{}-{}",
-            std::process::id(),
-            n
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("emacette-completion-{}-{}", std::process::id(), n));
         fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -3113,6 +3381,87 @@ mod tests {
         ed.handle_key(Key::alt(';'));
         assert!(ed.message.contains("No line-comment"));
         assert_eq!(ed.buffer_text(), "plain\n");
+    }
+
+    #[test]
+    fn tabs_open_switch_and_close() {
+        let dir = temp_dir();
+        let first = dir.join("first.txt");
+        let second = dir.join("second.txt");
+        fs::write(&first, "first\n").unwrap();
+        fs::write(&second, "second\n").unwrap();
+        let mut ed = editor("");
+        ed.open_file(first);
+        assert_eq!(ed.tab_count(), 1);
+        assert_eq!(ed.buffer_text(), "first\n");
+
+        ed.open_file(second);
+        assert_eq!(ed.tab_count(), 2);
+        assert_eq!(ed.buffer_text(), "second\n");
+        assert!(ed
+            .tab_labels()
+            .iter()
+            .any(|(name, active)| name == "second.txt" && *active));
+
+        ed.switch_tab(-1);
+        assert_eq!(ed.buffer_text(), "first\n");
+        ed.switch_tab(1);
+        assert_eq!(ed.buffer_text(), "second\n");
+
+        ed.close_tab();
+        assert_eq!(ed.tab_count(), 1);
+        assert_eq!(ed.buffer_text(), "first\n");
+        ed.close_tab();
+        assert!(ed.should_quit);
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn tabs_preserve_unsaved_buffers() {
+        let dir = temp_dir();
+        let first = dir.join("first.txt");
+        fs::write(&first, "first\n").unwrap();
+        let mut ed = editor("");
+        ed.handle_key(Key::ch('d'));
+        ed.open_file(first.clone());
+        assert_eq!(ed.tab_count(), 2);
+        assert_eq!(ed.buffer_text(), "first\n");
+        ed.switch_tab(-1);
+        assert_eq!(ed.buffer_text(), "d");
+        ed.open_file(first);
+        assert_eq!(ed.tab_count(), 2);
+        assert_eq!(ed.buffer_text(), "first\n");
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn quit_switches_to_another_unsaved_tab_first() {
+        let dir = temp_dir();
+        let path = dir.join("clean.txt");
+        fs::write(&path, "clean\n").unwrap();
+        let mut ed = editor("");
+        ed.handle_key(Key::ch('x'));
+        ed.open_file(path);
+        assert_eq!(ed.tab_count(), 2);
+        assert_eq!(ed.buffer_text(), "clean\n");
+        ed.handle_key(Key::ctrl('x'));
+        ed.handle_key(Key::ctrl('c'));
+        assert!(!ed.should_quit);
+        assert_eq!(ed.buffer_text(), "x");
+        assert!(ed.message.contains("unsaved"));
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn tab_close_refuses_unsaved_changes() {
+        let mut ed = editor("");
+        ed.new_tab();
+        assert_eq!(ed.tab_count(), 2);
+        ed.handle_key(Key::ch('x'));
+        ed.close_tab();
+        assert_eq!(ed.tab_count(), 2);
+        assert!(!ed.should_quit);
+        assert!(ed.message.contains("modified"));
     }
 
     #[test]

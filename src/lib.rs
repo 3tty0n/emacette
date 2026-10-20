@@ -1,4 +1,4 @@
-//! nano-emacs: a tiny Emacs-flavoured terminal editor.
+//! emacette: a tiny Emacs-flavoured terminal editor.
 
 pub mod buffer;
 pub mod completion;

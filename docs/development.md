@@ -1,6 +1,6 @@
 # Development and releases
 
-Part of [nano-emacs](../README.md).
+Part of [emacette](../README.md).
 
 ## Requirements
 
@@ -11,7 +11,7 @@ Part of [nano-emacs](../README.md).
 ## Build and test
 
 ```sh
-cargo build --release     # target/release/nemacs
+cargo build --release     # target/release/emacette
 cargo test                # unit and integration tests
 make e2e                  # PTY end-to-end tests, including a real git commit
 make check                # rustfmt check and tests
@@ -28,7 +28,7 @@ Measurements are median time from process start to first terminal output, using
 a 44-line Rust file, 9 runs, on an Intel Core Ultra 7 155U running Arch Linux.
 Values vary by about 20%.
 
-- `nemacs` — 2.7 ms
+- `emacette` — 2.7 ms
 - `nano` — 3.9 ms
 - `vim` — 5.3 ms
 - `emacs -nw -Q` — 80.4 ms
@@ -50,7 +50,7 @@ Releases are built and published manually.
 ./scripts/release.sh --version 0.2.0 --output dist
 ```
 
-- The script writes `dist/nemacs-v<version>-<target>.tar.gz` and a `.sha256`
+- The script writes `dist/emacette-v<version>-<target>.tar.gz` and a `.sha256`
   file.
 - The script does not tag or upload.
 - `make release ARGS="--target x86_64-unknown-linux-musl"` is equivalent to the
@@ -66,6 +66,6 @@ Publish the files with the GitHub CLI or the web UI:
 git tag v0.1.0
 git push origin v0.1.0
 gh release create v0.1.0 \
-  dist/nemacs-v0.1.0-*.tar.gz dist/nemacs-v0.1.0-*.tar.gz.sha256 \
+  dist/emacette-v0.1.0-*.tar.gz dist/emacette-v0.1.0-*.tar.gz.sha256 \
   --generate-notes
 ```

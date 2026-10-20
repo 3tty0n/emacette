@@ -1,6 +1,6 @@
 # Spelling
 
-Part of [nano-emacs](../README.md).
+Part of [emacette](../README.md).
 
 Spell checking is English-only for now. It highlights misspelled words in
 prose modes and can suggest corrections.
@@ -23,7 +23,8 @@ similar commands are also skipped.
 The checker uses the first available source:
 
 - `spell_dictionary` from the configuration file.
-- `$NANO_EMACS_DICT`.
+- `$EMACETTE_DICT`.
+- `$NANO_EMACS_DICT` (legacy fallback).
 - `/usr/share/dict/words`.
 - `/usr/share/dict/american-english`.
 - `/usr/share/dict/british-english`.
@@ -44,7 +45,7 @@ words; affix expansions are not applied, so inflected forms may be flagged.
 - `spell_dictionary = /path/to/words` — use an explicit dictionary.
 - Both keys can be overridden in a language section, for example
   `[markdown]` or `[latex]`. See [Configuration](configuration.md).
-- `NANO_EMACS_DICT=/path/to/words nemacs FILE` — one-off dictionary override.
+- `EMACETTE_DICT=/path/to/words emacette FILE` — one-off dictionary override.
 
 See [Configuration](configuration.md) for the rest of the options.
 

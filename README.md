@@ -1,7 +1,7 @@
-# nano-emacs
+# emacette
 
 A lightweight Emacs-flavoured terminal editor for git commit messages, file
-viewing, and small edits. The binary is `nemacs`.
+viewing, and small edits. The binary is `emacette`.
 
 ## Features
 
@@ -9,7 +9,8 @@ viewing, and small edits. The binary is `nemacs`.
 - Emacs-style key bindings, minibuffer, mark/region, kill ring, and undo.
 - Incremental rendering: only changed terminal rows are repainted.
 - Syntax highlighting for 39 [languages and formats](docs/languages.md).
-- CJK/full-width text, tabs, horizontal scrolling, and line numbers.
+- CJK/full-width text, tab stops, horizontal scrolling, and line numbers.
+- Multiple file [tabs](docs/tabs.md) with a tab bar and unsaved-tab protection.
 - Auto-fill and optional [soft wrapping](docs/configuration.md#soft-wrapping)
   of long lines.
 - Minibuffer completion lists and optional [editor completion](docs/completion.md).
@@ -25,9 +26,9 @@ viewing, and small edits. The binary is `nemacs`.
 ## Quick start
 
 ```sh
-cargo install --path .        # ~/.cargo/bin/nemacs
-nemacs FILE
-nemacs +42 FILE
+cargo install --path .        # ~/.cargo/bin/emacette
+emacette FILE
+emacette +42 FILE
 ```
 
 See [Installation](docs/install.md) for prebuilt binaries, `install.sh`, and
@@ -35,15 +36,15 @@ uninstall instructions.
 
 ## Usage
 
-- `nemacs` — start with a scratch buffer.
-- `nemacs FILE` — open a file, or create it.
-- `nemacs +LINE FILE` — start at a line.
-- `nemacs --help` — print the key bindings.
+- `emacette` — start with a scratch buffer.
+- `emacette FILE` — open a file, or create it.
+- `emacette +LINE FILE` — start at a line.
+- `emacette --help` — print the key bindings.
 
 ## Git
 
 ```sh
-git config --global core.editor nemacs
+git config --global core.editor emacette
 ```
 
 - `C-c C-c` — save the message and exit.
@@ -55,6 +56,7 @@ See [Git integration](docs/git.md) for the full commit workflow.
 ## Documentation
 
 - [Key bindings](docs/keys.md) — full key list, regions, search, and minibuffer editing.
+- [Tabs](docs/tabs.md) — multiple files, switching, and closing tabs.
 - [Commands](docs/commands.md) — `M-x` commands for files, regions, display, and spelling.
 - [Completion](docs/completion.md) — minibuffer lists and optional editor completion.
 - [Spelling](docs/spelling.md) — English dictionaries, highlighting, and corrections.
@@ -65,9 +67,22 @@ See [Git integration](docs/git.md) for the full commit workflow.
 - [Git integration](docs/git.md) — editor setup and commit behaviour.
 - [Development and releases](docs/development.md) — build, test, benchmark, and release.
 
+## Renaming from nano-emacs
+
+The project and binary are now `emacette`. Existing setups keep working where
+practical:
+
+- The new config path is `~/.config/emacette/config`.
+- If it does not exist, the old `~/.config/nano-emacs/config` is read.
+- `EMACETTE_CONFIG` and `EMACETTE_DICT` replace `NANO_EMACS_CONFIG` and
+  `NANO_EMACS_DICT`; the old variables are still accepted as fallbacks.
+- Update `git config --global core.editor` and any scripts that invoked
+  `nemacs` to use `emacette`.
+- `cargo uninstall nano-emacs` removes an old cargo-installed binary.
+
 ## Limitations
 
-- One buffer; no window splits or multiple buffers.
+- One window with tabs; no window splits or multiple panes.
 - UTF-8 only; binary and non-UTF-8 files are rejected.
 - Kill ring only; no system clipboard integration.
 - Editor completion falls back to buffer words without LSP; there is no fuzzy matching.

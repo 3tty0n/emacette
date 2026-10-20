@@ -4,15 +4,15 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use nano_emacs::config::Config;
-use nano_emacs::editor::Editor;
-use nano_emacs::key::{Key, KeyCode};
-use nano_emacs::syntax::Lang;
+use emacette::config::Config;
+use emacette::editor::Editor;
+use emacette::key::{Key, KeyCode};
+use emacette::syntax::Lang;
 
 fn temp_dir() -> PathBuf {
     static COUNTER: AtomicUsize = AtomicUsize::new(0);
     let n = COUNTER.fetch_add(1, Ordering::SeqCst);
-    let dir = std::env::temp_dir().join(format!("nano-emacs-it-{}-{}", std::process::id(), n));
+    let dir = std::env::temp_dir().join(format!("emacette-it-{}-{}", std::process::id(), n));
     fs::create_dir_all(&dir).unwrap();
     dir
 }
@@ -45,7 +45,7 @@ fn save_buffer_writes_the_file() {
     let path = dir.join("note.txt");
     fs::write(&path, "existing\n").unwrap();
     let mut ed = Editor::from_text("existing\n", Some(path.clone()), Config::default());
-    ed.buffer.set_point(nano_emacs::buffer::Point::new(0, 0));
+    ed.buffer.set_point(emacette::buffer::Point::new(0, 0));
     type_text(&mut ed, ">");
     press(&mut ed, &[Key::ctrl('x'), Key::ctrl('s')]);
     assert_eq!(fs::read_to_string(&path).unwrap(), ">existing\n");
@@ -80,11 +80,11 @@ fn find_file_prompt_opens_a_file() {
     press(&mut ed, &[ENTER]);
     assert_eq!(ed.buffer_text(), "# hello\n");
     assert_eq!(ed.mode, Lang::Markdown);
-    assert_eq!(ed.buffer.point, nano_emacs::buffer::Point::new(0, 0));
+    assert_eq!(ed.buffer.point, emacette::buffer::Point::new(0, 0));
 }
 
 #[test]
-fn find_file_is_refused_when_buffer_is_modified() {
+fn find_file_opens_a_new_tab_when_buffer_is_modified() {
     let dir = temp_dir();
     let target = dir.join("other.txt");
     fs::write(&target, "other\n").unwrap();
@@ -94,8 +94,11 @@ fn find_file_is_refused_when_buffer_is_modified() {
     clear_minibuffer(&mut ed);
     type_text(&mut ed, target.to_str().unwrap());
     press(&mut ed, &[ENTER]);
+    assert_eq!(ed.buffer_text(), "other\n");
+    assert_eq!(ed.tab_count(), 2);
+    press(&mut ed, &[Key::ctrl('x'), Key::ch('t'), Key::ch('p')]);
     assert_eq!(ed.buffer_text(), "dirty");
-    assert!(ed.message.contains("modified"));
+    assert_eq!(ed.tab_count(), 2);
 }
 
 #[test]
@@ -199,12 +202,12 @@ fn git_commit_abort_discards_and_exits_nonzero() {
 #[test]
 fn search_sets_mark_at_the_origin() {
     let mut ed = editor("alpha\nbeta\n");
-    ed.buffer.set_point(nano_emacs::buffer::Point::new(1, 0));
+    ed.buffer.set_point(emacette::buffer::Point::new(1, 0));
     press(&mut ed, &[Key::ctrl('s')]);
     type_text(&mut ed, "alpha");
     press(&mut ed, &[ENTER]);
-    assert_eq!(ed.buffer.point, nano_emacs::buffer::Point::new(0, 0));
-    assert_eq!(ed.buffer.mark, Some(nano_emacs::buffer::Point::new(1, 0)));
+    assert_eq!(ed.buffer.point, emacette::buffer::Point::new(0, 0));
+    assert_eq!(ed.buffer.mark, Some(emacette::buffer::Point::new(1, 0)));
 }
 
 #[test]
@@ -228,7 +231,7 @@ fn toggle_line_numbers_command() {
 #[test]
 fn japanese_editing_and_kill_ring() {
     let mut ed = editor("日本語のテスト");
-    ed.buffer.set_point(nano_emacs::buffer::Point::new(0, 3));
+    ed.buffer.set_point(emacette::buffer::Point::new(0, 3));
     press(&mut ed, &[Key::ctrl(' ')]);
     press(&mut ed, &[Key::ctrl('f'), Key::ctrl('f')]);
     press(&mut ed, &[Key::ctrl('w')]);

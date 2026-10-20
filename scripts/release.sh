@@ -1,5 +1,5 @@
 #!/bin/sh
-# Build and package a nemacs release archive locally.
+# Build and package an emacette release archive locally.
 #
 # This script does not tag or upload anything. It leaves the archive and its
 # SHA-256 file in the output directory and prints the commands to publish
@@ -18,7 +18,7 @@ usage() {
     cat <<'EOF'
 Usage: scripts/release.sh [OPTIONS]
 
-Build and package a nemacs release archive locally. This does not tag or
+Build and package an emacette release archive locally. This does not tag or
 upload anything.
 
 Options:
@@ -102,30 +102,30 @@ fi
 
 if [ "$target" = "$host" ]; then
     cargo build --release --locked || die "cargo build failed"
-    bin="target/release/nemacs"
+    bin="target/release/emacette"
 elif command -v cross >/dev/null 2>&1; then
     cross build --release --locked --target "$target" || die "cross build failed for $target"
-    bin="target/$target/release/nemacs"
+    bin="target/$target/release/emacette"
 else
     cargo build --release --locked --target "$target" ||
         die "cargo build failed for $target (run 'rustup target add $target' or install cross)"
-    bin="target/$target/release/nemacs"
+    bin="target/$target/release/emacette"
 fi
 [ -f "$bin" ] || die "binary not found: $bin"
 
-tmp=$(mktemp -d "${TMPDIR:-/tmp}/nemacs-release.XXXXXX") ||
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/emacette-release.XXXXXX") ||
     die "cannot create a temporary directory"
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 
 stage="$tmp/package"
 mkdir -p "$stage"
-cp "$bin" "$stage/nemacs"
+cp "$bin" "$stage/emacette"
 cp README.md LICENSE "$stage/"
-chmod 755 "$stage/nemacs"
+chmod 755 "$stage/emacette"
 
-archive="nemacs-${tag}-${target}.tar.gz"
+archive="emacette-${tag}-${target}.tar.gz"
 mkdir -p "$output"
-COPYFILE_DISABLE=1 tar -czf "$output/$archive" -C "$stage" nemacs README.md LICENSE
+COPYFILE_DISABLE=1 tar -czf "$output/$archive" -C "$stage" emacette README.md LICENSE
 
 if command -v sha256sum >/dev/null 2>&1; then
     (cd "$output" && sha256sum "$archive" > "$archive.sha256")

@@ -17,13 +17,22 @@ pub struct SpellChecker {
 }
 
 impl SpellChecker {
-    /// Load an explicit dictionary, `$NANO_EMACS_DICT`, or a common English
-    /// word list / hunspell dictionary.
+    /// Load an explicit dictionary, `$EMACETTE_DICT` (or the legacy
+    /// `$NANO_EMACS_DICT`), or a common English word list / hunspell
+    /// dictionary.
     pub fn load(explicit: Option<&str>) -> Option<Self> {
         let path = explicit
             .map(expand_path)
             .filter(|path| path.is_file())
             .or_else(|| {
+                std::env::var("EMACETTE_DICT")
+                    .ok()
+                    .filter(|value| !value.is_empty())
+                    .map(|value| expand_path(&value))
+                    .filter(|path| path.is_file())
+            })
+            .or_else(|| {
+                // Migration fallback from the old project name.
                 std::env::var("NANO_EMACS_DICT")
                     .ok()
                     .filter(|value| !value.is_empty())

@@ -256,7 +256,7 @@ impl LspClient {
         let params = json!({
             "processId": std::process::id(),
             "clientInfo": {
-                "name": "nano-emacs",
+                "name": "emacette",
                 "version": env!("CARGO_PKG_VERSION")
             },
             "rootUri": root_uri,

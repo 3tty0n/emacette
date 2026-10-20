@@ -1,13 +1,13 @@
 # Git integration
 
-Part of [nano-emacs](../README.md).
+Part of [emacette](../README.md).
 
 ## Set as the default editor
 
 ```sh
-git config --global core.editor nemacs
-git config --global core.editor "$HOME/.local/bin/nemacs"     # not on PATH
-GIT_EDITOR=nemacs git commit                                   # one-off
+git config --global core.editor emacette
+git config --global core.editor "$HOME/.local/bin/emacette"     # not on PATH
+GIT_EDITOR=emacette git commit                                   # one-off
 ```
 
 ## Commit workflow

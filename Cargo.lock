@@ -82,6 +82,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "emacette"
+version = "0.1.0"
+dependencies = [
+ "crossterm",
+ "serde_json",
+ "unicode-width",
+]
+
+[[package]]
 name = "errno"
 version = "0.3.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -146,15 +155,6 @@ dependencies = [
  "log",
  "wasi",
  "windows-sys",
-]
-
-[[package]]
-name = "nano-emacs"
-version = "0.1.0"
-dependencies = [
- "crossterm",
- "serde_json",
- "unicode-width",
 ]
 
 [[package]]

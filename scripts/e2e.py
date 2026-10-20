@@ -17,7 +17,7 @@ sys.path.insert(0, HERE)
 from ptyharness import run  # noqa: E402
 from screen import screen_from_ansi  # noqa: E402
 
-BIN = os.path.abspath(sys.argv[1] if len(sys.argv) > 1 else os.path.join(ROOT, "target", "release", "nemacs"))
+BIN = os.path.abspath(sys.argv[1] if len(sys.argv) > 1 else os.path.join(ROOT, "target", "release", "emacette"))
 COLS, ROWS = 80, 20
 
 failures = []
@@ -32,7 +32,7 @@ def check(name, condition, detail=""):
 
 
 def tmpfile(text, name="note.txt"):
-    directory = tempfile.mkdtemp(prefix="nano-emacs-e2e-")
+    directory = tempfile.mkdtemp(prefix="emacette-e2e-")
     path = os.path.join(directory, name)
     with open(path, "w", encoding="utf-8") as handle:
         handle.write(text)
@@ -50,7 +50,7 @@ def test_basic_edit_and_save():
         [b"hello\n", b"\x18\x13", b"\x18\x03"],
         cols=COLS,
         rows=ROWS,
-        expect=b"nemacs",
+        expect=b"emacette",
     )
     with open(path, encoding="utf-8") as handle:
         content = handle.read()
@@ -67,7 +67,7 @@ def test_japanese_input():
         [text.encode("utf-8"), b"\x18\x13", b"\x18\x03"],
         cols=COLS,
         rows=ROWS,
-        expect=b"nemacs",
+        expect=b"emacette",
     )
     with open(path, encoding="utf-8") as handle:
         content = handle.read()
@@ -82,7 +82,7 @@ def test_undo_key():
         [b"abc", b"\x1f", b"\x18\x13", b"\x18\x03"],
         cols=COLS,
         rows=ROWS,
-        expect=b"nemacs",
+        expect=b"emacette",
     )
     with open(path, encoding="utf-8") as handle:
         content = handle.read()
@@ -96,7 +96,7 @@ def test_mark_and_kill_region():
         [b"\x00", b"\x06" * 5, b"\x17", b"\x18\x13", b"\x18\x03"],
         cols=COLS,
         rows=ROWS,
-        expect=b"nemacs",
+        expect=b"emacette",
     )
     with open(path, encoding="utf-8") as handle:
         content = handle.read()
@@ -110,7 +110,7 @@ def test_region_delete_and_copy():
         [b"\x00", b"\x06" * 5, b"\x7f", b"\x18\x13", b"\x18\x03"],
         cols=COLS,
         rows=ROWS,
-        expect=b"nemacs",
+        expect=b"emacette",
     )
     with open(path, encoding="utf-8") as handle:
         content = handle.read()
@@ -126,7 +126,7 @@ def test_region_delete_and_copy():
         [b"\x00", b"\x06" * 5, b"\x1bw", b"\x05", b"\x19", b"\x18\x13", b"\x18\x03"],
         cols=COLS,
         rows=ROWS,
-        expect=b"nemacs",
+        expect=b"emacette",
     )
     with open(path, encoding="utf-8") as handle:
         content = handle.read()
@@ -138,7 +138,7 @@ def test_region_delete_and_copy():
 
 
 def test_find_file_tab_completion():
-    directory = tempfile.mkdtemp(prefix="nano-emacs-e2e-")
+    directory = tempfile.mkdtemp(prefix="emacette-e2e-")
     start = os.path.join(directory, "note.txt")
     with open(start, "w", encoding="utf-8") as handle:
         handle.write("start\n")
@@ -158,7 +158,7 @@ def test_find_file_tab_completion():
         ],
         cols=COLS,
         rows=ROWS,
-        expect=b"nemacs",
+        expect=b"emacette",
     )
     screen = body_screen(out)
     check(
@@ -174,7 +174,7 @@ def test_find_file_tab_completion():
 
 
 def test_minibuffer_menus_open_immediately():
-    directory = tempfile.mkdtemp(prefix="nano-emacs-e2e-")
+    directory = tempfile.mkdtemp(prefix="emacette-e2e-")
     path = os.path.join(directory, "note.txt")
     with open(path, "w", encoding="utf-8") as handle:
         handle.write("note\n")
@@ -188,7 +188,7 @@ def test_minibuffer_menus_open_immediately():
             [b"\x1bx", b"\x07", b"\x18\x06", b"\x07", b"\x18\x03"],
             cols=COLS,
             rows=ROWS,
-            expect=b"nemacs",
+            expect=b"emacette",
             key_delay=0.15,
         )
     finally:
@@ -203,7 +203,7 @@ def test_minibuffer_menus_open_immediately():
 
 
 def test_minibuffer_completion_ctrl_n():
-    directory = tempfile.mkdtemp(prefix="nano-emacs-e2e-")
+    directory = tempfile.mkdtemp(prefix="emacette-e2e-")
     start = os.path.join(directory, "note.txt")
     with open(start, "w", encoding="utf-8") as handle:
         handle.write("start\n")
@@ -222,7 +222,7 @@ def test_minibuffer_completion_ctrl_n():
         ],
         cols=COLS,
         rows=ROWS,
-        expect=b"nemacs",
+        expect=b"emacette",
     )
     screen = body_screen(out)
     check(
@@ -237,7 +237,7 @@ def test_lsp_diagnostics_and_completion():
     # processes a different /tmp view, which would hide the script.
     target = os.path.join(ROOT, "target")
     os.makedirs(target, exist_ok=True)
-    directory = tempfile.mkdtemp(prefix="nano-emacs-e2e-lsp-", dir=target)
+    directory = tempfile.mkdtemp(prefix="emacette-e2e-lsp-", dir=target)
     server = os.path.join(directory, "fake_lsp.py")
     with open(server, "w", encoding="utf-8") as handle:
         handle.write(
@@ -283,22 +283,22 @@ while True:
     path = os.path.join(directory, "lsp.txt")
     with open(path, "w", encoding="utf-8") as handle:
         handle.write("hello wurld\n")
-    previous = os.environ.get("NANO_EMACS_CONFIG")
-    os.environ["NANO_EMACS_CONFIG"] = config
+    previous = os.environ.get("EMACETTE_CONFIG")
+    os.environ["EMACETTE_CONFIG"] = config
     try:
         code, out, _ = run(
             [BIN, path],
             [b"\x05", b"al", b"\x18\x13", b"\x18\x03"],
             cols=COLS,
             rows=ROWS,
-            expect=b"nemacs",
+            expect=b"emacette",
             key_delay=0.5,
         )
     finally:
         if previous is None:
-            os.environ.pop("NANO_EMACS_CONFIG", None)
+            os.environ.pop("EMACETTE_CONFIG", None)
         else:
-            os.environ["NANO_EMACS_CONFIG"] = previous
+            os.environ["EMACETTE_CONFIG"] = previous
     with open(path, encoding="utf-8") as handle:
         content = handle.read()
     check(
@@ -314,28 +314,28 @@ while True:
 
 
 def test_editor_completion_menu():
-    directory = tempfile.mkdtemp(prefix="nano-emacs-e2e-")
+    directory = tempfile.mkdtemp(prefix="emacette-e2e-")
     config = os.path.join(directory, "config")
     with open(config, "w", encoding="utf-8") as handle:
         handle.write("editor_completion = true\n")
     path = os.path.join(directory, "doc.txt")
     with open(path, "w", encoding="utf-8") as handle:
         handle.write("alpha alphabet \n")
-    previous = os.environ.get("NANO_EMACS_CONFIG")
-    os.environ["NANO_EMACS_CONFIG"] = config
+    previous = os.environ.get("EMACETTE_CONFIG")
+    os.environ["EMACETTE_CONFIG"] = config
     try:
         code, out, _ = run(
             [BIN, path],
             [b"\x05", b"al", b"\t", b"\x18\x13", b"\x18\x03"],
             cols=COLS,
             rows=ROWS,
-            expect=b"nemacs",
+            expect=b"emacette",
         )
     finally:
         if previous is None:
-            os.environ.pop("NANO_EMACS_CONFIG", None)
+            os.environ.pop("EMACETTE_CONFIG", None)
         else:
-            os.environ["NANO_EMACS_CONFIG"] = previous
+            os.environ["EMACETTE_CONFIG"] = previous
     with open(path, encoding="utf-8") as handle:
         content = handle.read()
     check(
@@ -346,7 +346,7 @@ def test_editor_completion_menu():
 
 
 def test_spell_check():
-    directory = tempfile.mkdtemp(prefix="nano-emacs-e2e-")
+    directory = tempfile.mkdtemp(prefix="emacette-e2e-")
     dictionary = os.path.join(directory, "words")
     with open(dictionary, "w", encoding="utf-8") as handle:
         handle.write("hello\nworld\n")
@@ -356,21 +356,21 @@ def test_spell_check():
     path = os.path.join(directory, "doc.md")
     with open(path, "w", encoding="utf-8") as handle:
         handle.write("hello wurld\n")
-    previous = os.environ.get("NANO_EMACS_CONFIG")
-    os.environ["NANO_EMACS_CONFIG"] = config
+    previous = os.environ.get("EMACETTE_CONFIG")
+    os.environ["EMACETTE_CONFIG"] = config
     try:
         code, out, _ = run(
             [BIN, path],
             [b"\x1bxnext-spelling-error\r", b"\x1b$", b"\r", b"\x18\x13", b"\x18\x03"],
             cols=COLS,
             rows=ROWS,
-            expect=b"nemacs",
+            expect=b"emacette",
         )
     finally:
         if previous is None:
-            os.environ.pop("NANO_EMACS_CONFIG", None)
+            os.environ.pop("EMACETTE_CONFIG", None)
         else:
-            os.environ["NANO_EMACS_CONFIG"] = previous
+            os.environ["EMACETTE_CONFIG"] = previous
     with open(path, encoding="utf-8") as handle:
         content = handle.read()
     check(
@@ -383,8 +383,49 @@ def test_spell_check():
     )
 
 
+def test_tabs_switch_files():
+    directory = tempfile.mkdtemp(prefix="emacette-e2e-")
+    alpha = os.path.join(directory, "alpha.txt")
+    beta = os.path.join(directory, "beta.txt")
+    with open(alpha, "w", encoding="utf-8") as handle:
+        handle.write("alpha-content\n")
+    with open(beta, "w", encoding="utf-8") as handle:
+        handle.write("beta-content\n")
+    previous = os.getcwd()
+    os.chdir(directory)
+    try:
+        code, out, _ = run(
+            [BIN, alpha],
+            [
+                b"\x18\x06",  # C-x C-f
+                b"\x01\x0b",  # clear prompt
+                b"beta.txt",
+                b"\r",
+                b"\x18t", b"p",  # C-x t p: previous tab
+                b"\x18\x03",
+            ],
+            cols=COLS,
+            rows=ROWS,
+            expect=b"emacette",
+            key_delay=0.1,
+        )
+    finally:
+        os.chdir(previous)
+    screen = body_screen(out)
+    check(
+        "tabs switch between open files",
+        code == 0
+        and "alpha-content" in screen
+        and b"beta-content" in out
+        and b"alpha.txt" in out
+        and b"beta.txt" in out,
+        repr(screen[-400:]),
+    )
+    shutil.rmtree(directory, ignore_errors=True)
+
+
 def test_quit_without_changes_is_immediate():
-    directory = tempfile.mkdtemp(prefix="nano-emacs-e2e-")
+    directory = tempfile.mkdtemp(prefix="emacette-e2e-")
     path = os.path.join(directory, "note.txt")
     with open(path, "w", encoding="utf-8") as handle:
         handle.write("hello\n")
@@ -393,7 +434,7 @@ def test_quit_without_changes_is_immediate():
         [b"X", b"\x1f", b"\x18\x03"],
         cols=COLS,
         rows=ROWS,
-        expect=b"nemacs",
+        expect=b"emacette",
     )
     with open(path, encoding="utf-8") as handle:
         content = handle.read()
@@ -409,7 +450,7 @@ def test_quit_without_changes_is_immediate():
         [b"x", b"\x7f", b"\x18\x03"],
         cols=COLS,
         rows=ROWS,
-        expect=b"nemacs",
+        expect=b"emacette",
     )
     check(
         "empty new file quits without prompting",
@@ -426,7 +467,7 @@ def test_escape_meta_word_motion():
         [b"foo bar", b"\x01", b"\x1bf", b"X", b"\x18\x13", b"\x18\x03"],
         cols=COLS,
         rows=ROWS,
-        expect=b"nemacs",
+        expect=b"emacette",
     )
     with open(path, encoding="utf-8") as handle:
         content = handle.read()
@@ -440,7 +481,7 @@ def test_search_and_insert():
         [b"\x13", b"gamma", b"\r", b"!", b"\x18\x13", b"\x18\x03"],
         cols=COLS,
         rows=ROWS,
-        expect=b"nemacs",
+        expect=b"emacette",
     )
     with open(path, encoding="utf-8") as handle:
         content = handle.read()
@@ -456,7 +497,7 @@ def test_help_overlay():
         [b"\x1bOP", b"q", b"\x18\x03"],
         cols=COLS,
         rows=ROWS,
-        expect=b"nemacs",
+        expect=b"emacette",
     )
     check(
         "help opens with F1",
@@ -466,7 +507,7 @@ def test_help_overlay():
 
 
 def test_git_commit():
-    repo = tempfile.mkdtemp(prefix="nano-emacs-git-")
+    repo = tempfile.mkdtemp(prefix="emacette-git-")
     try:
         subprocess.run(["git", "-C", repo, "init", "-q"], check=True)
         subprocess.run(["git", "-C", repo, "config", "user.name", "Test"], check=True)
@@ -498,7 +539,7 @@ def test_git_commit():
 
 
 def test_git_empty_message_warning():
-    repo = tempfile.mkdtemp(prefix="nano-emacs-git-")
+    repo = tempfile.mkdtemp(prefix="emacette-git-")
     try:
         subprocess.run(["git", "-C", repo, "init", "-q"], check=True)
         subprocess.run(["git", "-C", repo, "config", "user.name", "Test"], check=True)
@@ -529,7 +570,7 @@ def test_git_empty_message_warning():
 
 
 def test_git_abort():
-    repo = tempfile.mkdtemp(prefix="nano-emacs-git-")
+    repo = tempfile.mkdtemp(prefix="emacette-git-")
     try:
         subprocess.run(["git", "-C", repo, "init", "-q"], check=True)
         subprocess.run(["git", "-C", repo, "config", "user.name", "Test"], check=True)
@@ -564,7 +605,7 @@ def test_plus_line_argument():
         [b"\x18\x03"],
         cols=COLS,
         rows=ROWS,
-        expect=b"nemacs",
+        expect=b"emacette",
     )
     check("+LINE positions the cursor", code == 0 and b"L2 C1" in out)
 
@@ -573,7 +614,7 @@ def test_cli():
     version = subprocess.run([BIN, "--version"], capture_output=True, text=True)
     check(
         "--version works",
-        version.returncode == 0 and "nemacs" in version.stdout,
+        version.returncode == 0 and "emacette" in version.stdout,
         repr(version.stdout),
     )
     help_text = subprocess.run([BIN, "--help"], capture_output=True, text=True)
@@ -616,6 +657,7 @@ def main():
     test_lsp_diagnostics_and_completion()
     test_editor_completion_menu()
     test_spell_check()
+    test_tabs_switch_files()
     test_quit_without_changes_is_immediate()
     test_escape_meta_word_motion()
     test_search_and_insert()

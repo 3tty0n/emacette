@@ -166,6 +166,8 @@ pub struct View {
     pub truncate_lines: bool,
     /// Rows reserved above the mode line for a completion menu.
     pub menu_rows: usize,
+    /// Rows used by the tab bar at the top of the screen.
+    pub tab_rows: usize,
 }
 
 impl Default for View {
@@ -181,6 +183,7 @@ impl Default for View {
             highlight_trailing_ws: true,
             truncate_lines: true,
             menu_rows: 0,
+            tab_rows: 0,
         }
     }
 }
@@ -192,6 +195,7 @@ impl View {
         self.height
             .saturating_sub(2)
             .saturating_sub(self.menu_rows)
+            .saturating_sub(self.tab_rows)
             .max(1)
     }
 

@@ -1,6 +1,6 @@
 # Key bindings
 
-Part of [nano-emacs](../README.md).
+Part of [emacette](../README.md).
 
 - `C-` means Ctrl.
 - `M-` means Alt, or ESC followed by the key.
@@ -13,7 +13,11 @@ Part of [nano-emacs](../README.md).
 - `C-x C-s` — save the buffer.
 - `C-x C-c` — quit; prompt only when the buffer differs from the last loaded or saved text.
 - `C-x C-w` — write the buffer to a file (save as).
-- `C-x C-f` — find a file.
+- `C-x C-f` — find a file; opens in a new tab.
+- `C-x t n` / `C-x t p` — next / previous tab.
+- `C-x t 2` — new scratch tab.
+- `C-x t k` — close the current tab.
+- `M-<right>` / `M-<left>` — next / previous tab.
 - `C-c C-c` — save and quit, finishing a git commit.
 - `C-c C-k` — abort a git commit without saving (prompts only when changed).
 
@@ -103,5 +107,5 @@ Part of [nano-emacs](../README.md).
 - `M-x ispell-next` / `ispell-previous` — jump between misspelled words.
 - `M-x ispell-buffer` — check the whole buffer.
 
-See [Completion](completion.md), [Spelling](spelling.md), and [LSP](lsp.md)
-for details.
+See [Completion](completion.md), [Spelling](spelling.md), [LSP](lsp.md), and
+[Tabs](tabs.md) for details.

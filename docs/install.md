@@ -1,6 +1,6 @@
 # Installation
 
-Part of [nano-emacs](../README.md).
+Part of [emacette](../README.md).
 
 ## Requirements
 
@@ -11,13 +11,13 @@ Part of [nano-emacs](../README.md).
 ## From source
 
 ```sh
-cargo install --path .        # ~/.cargo/bin/nemacs
-make install                  # ~/.local/bin/nemacs
+cargo install --path .        # ~/.cargo/bin/emacette
+make install                  # ~/.local/bin/emacette
 make install PREFIX=/usr/local
 ```
 
 - `cargo install --force` updates a source install.
-- `cargo uninstall nano-emacs` removes a cargo-installed binary.
+- `cargo uninstall emacette` removes a cargo-installed binary.
 - `make uninstall` removes a binary installed with `make install`.
 - `~/.local/bin` must be on `PATH` when installing with `make` or `install.sh`.
 
@@ -28,7 +28,7 @@ platform, verifies the SHA-256 checksum, and installs to
 `${PREFIX:-$HOME/.local}/bin`.
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/3tty0n/nano-emacs/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/3tty0n/emacette/main/install.sh | sh
 ```
 
 ## Installer options
@@ -44,11 +44,13 @@ From a checkout, or to pin a release:
 
 - The installer supports Linux assets for static musl or glibc.
 - The installer supports macOS universal or per-architecture assets.
-- Set `NEMACS_REPO=owner/repo` when the repository slug differs.
+- Set `EMACETTE_REPO=owner/repo` when the repository slug differs.
+- `NEMACS_REPO` and `NEMACS_BASE_URL` are accepted as legacy aliases.
 - Re-run the installer, or run `cargo install --force`, to update.
-- `--uninstall` never removes `~/.config/nano-emacs`.
+- `--uninstall` never removes `~/.config/emacette` or the legacy
+  `~/.config/nano-emacs`.
 
-The URLs above assume the repository is `3tty0n/nano-emacs`.
+The URLs above assume the repository is `3tty0n/emacette`.
 
 ## Optional dictionary for spell checking
 
@@ -57,7 +59,7 @@ paths listed in [Spelling](spelling.md) work.
 
 - Install a system dictionary such as `hunspell-en_US` or a `words` package.
 - Or set `spell_dictionary` in the configuration.
-- Or set `NANO_EMACS_DICT` for one run.
+- Or set `EMACETTE_DICT` for one run (`NANO_EMACS_DICT` is a legacy alias).
 
 ## Optional language servers
 

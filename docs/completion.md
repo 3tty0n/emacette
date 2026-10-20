@@ -1,6 +1,6 @@
 # Completion
 
-Part of [nano-emacs](../README.md).
+Part of [emacette](../README.md).
 
 ## Minibuffer completion
 

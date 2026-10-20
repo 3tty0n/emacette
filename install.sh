@@ -1,5 +1,5 @@
 #!/bin/sh
-# Install, update, or remove nemacs.
+# Install, update, or remove emacette.
 #
 # Installs a prebuilt binary from GitHub Releases by default. Use
 # --from-source to build the checkout with cargo instead. Re-running the
@@ -7,8 +7,8 @@
 # touched.
 set -eu
 
-REPO="${NEMACS_REPO:-3tty0n/nano-emacs}"
-BASE_URL="${NEMACS_BASE_URL:-https://github.com/$REPO/releases/download}"
+REPO="${EMACETTE_REPO:-${NEMACS_REPO:-3tty0n/emacette}}"
+BASE_URL="${EMACETTE_BASE_URL:-${NEMACS_BASE_URL:-https://github.com/$REPO/releases/download}}"
 
 prefix="${PREFIX:-$HOME/.local}"
 bindir=""
@@ -20,7 +20,7 @@ usage() {
     cat <<'EOF'
 Usage: install.sh [OPTIONS]
 
-Install, update, or remove the nemacs binary.
+Install, update, or remove the emacette binary.
 
 Options:
   --release TAG    Install a specific release tag (default: latest)
@@ -32,15 +32,17 @@ Options:
 Environment:
   PREFIX           Same as --prefix
   BINDIR           Binary directory (default: PREFIX/bin)
-  NEMACS_REPO      GitHub repository (default: 3tty0n/nano-emacs)
-  NEMACS_BASE_URL  Release download base URL (mirrors, testing)
+  EMACETTE_REPO        GitHub repository (default: 3tty0n/emacette)
+  EMACETTE_BASE_URL    Release download base URL (mirrors, testing)
+  NEMACS_REPO          Legacy alias for EMACETTE_REPO
+  NEMACS_BASE_URL      Legacy alias for EMACETTE_BASE_URL
 
 Supported assets:
   Linux x86_64/aarch64: static musl or glibc
   macOS x86_64/arm64: universal or per-architecture
 
 Updating is the same as installing: run this script again.
-Configuration in ~/.config/nano-emacs is kept by --uninstall.
+Configuration in ~/.config/emacette is kept by --uninstall.
 EOF
 }
 
@@ -84,21 +86,21 @@ bindir=${BINDIR:-"$prefix/bin"}
 if [ "$uninstall" = 1 ]; then
     [ "$from_source" = 0 ] || die "--uninstall cannot be combined with --from-source"
     [ -z "$release" ] || die "--uninstall cannot be combined with --release"
-    dest="$bindir/nemacs"
+    dest="$bindir/emacette"
     if [ -e "$dest" ]; then
         rm -f "$dest" || die "cannot remove $dest"
         printf 'Removed %s\n' "$dest"
     else
         printf 'Not installed: %s\n' "$dest"
     fi
-    printf 'Configuration is kept in %s\n' "${XDG_CONFIG_HOME:-$HOME/.config}/nano-emacs"
+    printf 'Configuration is kept in %s\n' "${XDG_CONFIG_HOME:-$HOME/.config}/emacette"
     exit 0
 fi
 
 install_binary() {
     src=$1
-    dest="$bindir/nemacs"
-    tmp="$bindir/.nemacs.$$"
+    dest="$bindir/emacette"
+    tmp="$bindir/.emacette.$$"
     cp "$src" "$tmp" || die "cannot write to $bindir"
     chmod 755 "$tmp" || {
         rm -f "$tmp"
@@ -120,7 +122,7 @@ if [ "$from_source" = 1 ]; then
     [ -f "$script_dir/Cargo.toml" ] || die "--from-source needs a source checkout"
     (cd "$script_dir" && cargo build --release --locked) || die "cargo build failed"
     mkdir -p "$bindir" || die "cannot create $bindir"
-    install_binary "$script_dir/target/release/nemacs"
+    install_binary "$script_dir/target/release/emacette"
     exit 0
 fi
 
@@ -177,7 +179,7 @@ if [ -z "$release" ]; then
     esac
 fi
 
-tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/nemacs.XXXXXX") || die "cannot create a temporary directory"
+tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/emacette.XXXXXX") || die "cannot create a temporary directory"
 trap 'rm -rf "$tmpdir"' EXIT HUP INT TERM
 
 # Try the preferred asset for this platform, then fall back to the other
@@ -185,7 +187,7 @@ trap 'rm -rf "$tmpdir"' EXIT HUP INT TERM
 archive=""
 url=""
 for candidate in $candidates; do
-    try_archive="nemacs-${release}-${candidate}.tar.gz"
+    try_archive="emacette-${release}-${candidate}.tar.gz"
     try_url="${BASE_URL%/}/${release}/${try_archive}"
     printf 'Trying %s\n' "$try_url"
     if curl -fsSL "$try_url" -o "$tmpdir/$try_archive" 2>/dev/null; then
@@ -204,7 +206,7 @@ actual=$(sha256_of "$tmpdir/$archive")
 [ "$expected" = "$actual" ] || die "checksum mismatch for $archive"
 
 tar -xzf "$tmpdir/$archive" -C "$tmpdir" || die "cannot extract $archive"
-[ -f "$tmpdir/nemacs" ] || die "$archive does not contain a nemacs binary"
+[ -f "$tmpdir/emacette" ] || die "$archive does not contain an emacette binary"
 
 mkdir -p "$bindir" || die "cannot create $bindir"
-install_binary "$tmpdir/nemacs"
+install_binary "$tmpdir/emacette"

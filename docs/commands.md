@@ -1,13 +1,13 @@
 # Commands
 
-Part of [nano-emacs](../README.md).
+Part of [emacette](../README.md).
 
 `M-x` runs a command by name. See [Completion](completion.md) for editor and
 minibuffer completion, and [Spelling](spelling.md) for spell checking.
 
 ## Files and buffers
 
-- `find-file` — open a file.
+- `find-file` — open a file in a new tab (or select its existing tab).
 - `save-buffer` — save the current buffer.
 - `write-file` — write the buffer to a different file.
 - `revert-buffer` — reload the file from disk.
@@ -38,6 +38,10 @@ minibuffer completion, and [Spelling](spelling.md) for spell checking.
 - `comment-dwim` — comment or uncomment the current line or region.
 - `next-error` — jump to the next LSP diagnostic.
 - `previous-error` — jump to the previous LSP diagnostic.
+- `tab-next` — switch to the next tab.
+- `tab-previous` — switch to the previous tab.
+- `tab-new` — create a scratch tab.
+- `tab-close` — close the current tab.
 - `flyspell-mode` — enable or disable spell checking in prose modes.
 - `spell-check-mode` — alias for `flyspell-mode`.
 - `toggle-spell-check` — alias for `flyspell-mode`.
@@ -71,4 +75,5 @@ minibuffer completion, and [Spelling](spelling.md) for spell checking.
 - [Completion](completion.md) — minibuffer lists, candidate cycling, and optional editor completion.
 - [Spelling](spelling.md) — dictionary discovery, highlighting, and `M-$`.
 - [LSP](lsp.md) — language servers, diagnostics, and completion.
+- [Tabs](tabs.md) — multiple files, switching, and closing tabs.
 - [Key bindings](keys.md) — every key, including region and search behaviour.

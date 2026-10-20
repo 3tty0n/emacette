@@ -1,9 +1,10 @@
 //! Optional user configuration.
 //!
 //! A simple `key = value` file is read from
-//! `$NANO_EMACS_CONFIG`, `$XDG_CONFIG_HOME/nano-emacs/config`, or
-//! `~/.config/nano-emacs/config`. Unknown keys are ignored, so the file can
-//! grow without breaking older builds.
+//! `$EMACETTE_CONFIG`, `$XDG_CONFIG_HOME/emacette/config`, or
+//! `~/.config/emacette/config`. The legacy `NANO_EMACS_CONFIG` and
+//! `~/.config/nano-emacs/config` are read as fallbacks. Unknown keys are
+//! ignored, so the file can grow without breaking older builds.
 //!
 //! Values outside a section are the defaults for every language. A section
 //! such as `[rust]` overrides only that language.
@@ -455,23 +456,47 @@ fn normalize_section(name: &str) -> String {
 }
 
 fn config_path() -> Option<PathBuf> {
+    if let Ok(path) = env::var("EMACETTE_CONFIG") {
+        if !path.is_empty() {
+            return Some(PathBuf::from(path));
+        }
+    }
+    let (new_path, legacy_path) = match env::var("XDG_CONFIG_HOME")
+        .ok()
+        .filter(|dir| !dir.is_empty())
+    {
+        Some(dir) => (
+            PathBuf::from(&dir).join("emacette").join("config"),
+            PathBuf::from(dir).join("nano-emacs").join("config"),
+        ),
+        None => {
+            let home = env::var("HOME").ok()?;
+            (
+                PathBuf::from(&home)
+                    .join(".config")
+                    .join("emacette")
+                    .join("config"),
+                PathBuf::from(home)
+                    .join(".config")
+                    .join("nano-emacs")
+                    .join("config"),
+            )
+        }
+    };
+    if new_path.is_file() {
+        return Some(new_path);
+    }
+    // Migration fallback: the old environment variable is still honored.
     if let Ok(path) = env::var("NANO_EMACS_CONFIG") {
         if !path.is_empty() {
             return Some(PathBuf::from(path));
         }
     }
-    if let Ok(dir) = env::var("XDG_CONFIG_HOME") {
-        if !dir.is_empty() {
-            return Some(PathBuf::from(dir).join("nano-emacs").join("config"));
-        }
+    if legacy_path.is_file() {
+        Some(legacy_path)
+    } else {
+        Some(new_path)
     }
-    let home = env::var("HOME").ok()?;
-    Some(
-        PathBuf::from(home)
-            .join(".config")
-            .join("nano-emacs")
-            .join("config"),
-    )
 }
 
 #[cfg(test)]
