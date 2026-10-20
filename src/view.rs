@@ -164,6 +164,8 @@ pub struct View {
     pub tab_width: usize,
     pub highlight_trailing_ws: bool,
     pub truncate_lines: bool,
+    /// Rows reserved above the mode line for a completion menu.
+    pub menu_rows: usize,
 }
 
 impl Default for View {
@@ -178,14 +180,19 @@ impl Default for View {
             tab_width: 4,
             highlight_trailing_ws: true,
             truncate_lines: true,
+            menu_rows: 0,
         }
     }
 }
 
 impl View {
-    /// Rows available for text (the last two rows are the mode line and echo area).
+    /// Rows available for text (the last two rows are the mode line and echo
+    /// area; completion menus reserve rows above them).
     pub fn body_height(&self) -> usize {
-        self.height.saturating_sub(2).max(1)
+        self.height
+            .saturating_sub(2)
+            .saturating_sub(self.menu_rows)
+            .max(1)
     }
 
     pub fn gutter(&self, line_count: usize) -> usize {

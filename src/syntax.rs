@@ -97,6 +97,19 @@ impl Lang {
         }
     }
 
+    /// Modes where prose-oriented features such as spell checking make sense.
+    pub fn is_prose(self) -> bool {
+        matches!(
+            self,
+            Lang::Plain
+                | Lang::Markdown
+                | Lang::Latex
+                | Lang::Rst
+                | Lang::AsciiDoc
+                | Lang::GitCommit
+        )
+    }
+
     pub fn detect(path: Option<&Path>, first_line: Option<&str>) -> Lang {
         if let Some(path) = path {
             let name = path

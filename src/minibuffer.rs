@@ -1,11 +1,14 @@
 //! The minibuffer: a single line prompt with Emacs-ish editing.
 
+use crate::buffer::Point;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PromptKind {
     FindFile,
     WriteFile { then_quit: bool },
     GotoLine,
     Mx,
+    SpellReplace { start: Point, end: Point },
 }
 
 #[derive(Clone, Debug)]

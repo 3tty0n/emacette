@@ -45,6 +45,7 @@ Part of [nano-emacs](../README.md).
 - `C-o` — open a line below point.
 - `C-/` or `C-_` — undo; `M-x redo` redoes.
 - `TAB` / `S-TAB` — indent / unindent.
+- `M-$` — prompt to replace the misspelled word at point.
 
 ### Region behaviour
 
@@ -76,4 +77,19 @@ Part of [nano-emacs](../README.md).
 - `C-k` — kill to the end of the input.
 - `C-w` — delete the previous word.
 
-See [Commands and minibuffer completion](commands.md) for completion details.
+## Editor completion
+
+- `TAB` or `RET` — accept the selected candidate.
+- `Down` / `C-n` — select the next candidate.
+- `Up` / `C-p` — select the previous candidate.
+- `Esc` or `C-g` — dismiss the completion menu.
+- Word characters and `Backspace` — filter the candidates.
+- Other keys dismiss the menu and run normally.
+
+## Spelling
+
+- `M-x flyspell-mode` — toggle misspelling highlights.
+- `M-x ispell-next` / `ispell-previous` — jump between misspelled words.
+- `M-x ispell-buffer` — check the whole buffer.
+
+See [Completion](completion.md) and [Spelling](spelling.md) for details.

@@ -78,6 +78,7 @@ impl ThemeName {
     }
 }
 
+#[derive(Clone)]
 pub struct Theme {
     pub syntax: [Style; TOK_COUNT],
     pub text: Style,
@@ -94,6 +95,9 @@ pub struct Theme {
     pub help_key: Style,
     pub help_dim: Style,
     pub fill: Style,
+    pub completion: Style,
+    pub completion_selected: Style,
+    pub spell: Style,
 }
 
 impl Theme {
@@ -143,6 +147,9 @@ impl Theme {
             help_key: Style::fg(222),
             help_dim: Style::fg(244),
             fill: Style::fg(238),
+            completion: Style::fg(250).with_bg(236),
+            completion_selected: Style::fg(231).with_bg(60).bold(),
+            spell: Style::fg(203).underline(),
         }
     }
 
@@ -181,6 +188,9 @@ impl Theme {
             help_key: Style::fg(160),
             help_dim: Style::fg(244),
             fill: Style::fg(250),
+            completion: Style::fg(235).with_bg(253),
+            completion_selected: Style::fg(16).with_bg(153).bold(),
+            spell: Style::fg(160).underline(),
         }
     }
 }

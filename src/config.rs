@@ -23,6 +23,12 @@ pub struct Config {
     pub fill_column: usize,
     /// Truncate long lines and scroll horizontally instead of wrapping them.
     pub truncate_lines: bool,
+    /// Show word-completion candidates while typing in the editor.
+    pub editor_completion: bool,
+    /// Highlight misspelled words in prose modes.
+    pub spell_check: bool,
+    /// Optional path to a word list or hunspell `.dic` file.
+    pub spell_dictionary: Option<String>,
     pub theme: ThemeName,
     /// Comment character used by git's commit message template.
     pub comment_char: char,
@@ -39,6 +45,9 @@ impl Default for Config {
             auto_fill: false,
             fill_column: 70,
             truncate_lines: true,
+            editor_completion: false,
+            spell_check: false,
+            spell_dictionary: None,
             theme: ThemeName::Dark,
             comment_char: '#',
             confirm_on_quit: true,
@@ -102,6 +111,23 @@ impl Config {
                 "truncate_lines" | "truncate-lines" | "truncate" => {
                     if let Some(b) = parse_bool(value) {
                         self.truncate_lines = b;
+                    }
+                }
+                "editor_completion" | "editor-completion" | "completion_in_editor" => {
+                    if let Some(b) = parse_bool(value) {
+                        self.editor_completion = b;
+                    }
+                }
+                "spell_check" | "spell-check" | "spellcheck" => {
+                    if let Some(b) = parse_bool(value) {
+                        self.spell_check = b;
+                    }
+                }
+                "spell_dictionary" | "spell-dictionary" => {
+                    if value.is_empty() {
+                        self.spell_dictionary = None;
+                    } else {
+                        self.spell_dictionary = Some(value.to_string());
                     }
                 }
                 "confirm_on_quit" | "confirm-on-quit" => {
@@ -196,6 +222,9 @@ mod tests {
             auto_fill = yes
             fill_column = 42
             truncate_lines = false
+            editor_completion = true
+            spell_check = yes
+            spell_dictionary = /tmp/words
             comment_char = ;
             nonsense = 42
             "#,
@@ -207,6 +236,9 @@ mod tests {
         assert!(config.auto_fill);
         assert_eq!(config.fill_column, 42);
         assert!(!config.truncate_lines);
+        assert!(config.editor_completion);
+        assert!(config.spell_check);
+        assert_eq!(config.spell_dictionary.as_deref(), Some("/tmp/words"));
         assert_eq!(config.comment_char, ';');
     }
 

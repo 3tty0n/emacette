@@ -167,6 +167,81 @@ def test_find_file_tab_completion():
         code == 0 and "alphabet" in screen,
         repr(screen[-300:]),
     )
+    check(
+        "completion menu lists candidates",
+        b"alpha.txt" in out and b"alphabet.txt" in out,
+        repr(out[-400:]),
+    )
+
+
+def test_editor_completion_menu():
+    directory = tempfile.mkdtemp(prefix="nano-emacs-e2e-")
+    config = os.path.join(directory, "config")
+    with open(config, "w", encoding="utf-8") as handle:
+        handle.write("editor_completion = true\n")
+    path = os.path.join(directory, "doc.txt")
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write("alpha alphabet \n")
+    previous = os.environ.get("NANO_EMACS_CONFIG")
+    os.environ["NANO_EMACS_CONFIG"] = config
+    try:
+        code, out, _ = run(
+            [BIN, path],
+            [b"\x05", b"al", b"\t", b"\x18\x13", b"\x18\x03"],
+            cols=COLS,
+            rows=ROWS,
+            expect=b"nemacs",
+        )
+    finally:
+        if previous is None:
+            os.environ.pop("NANO_EMACS_CONFIG", None)
+        else:
+            os.environ["NANO_EMACS_CONFIG"] = previous
+    with open(path, encoding="utf-8") as handle:
+        content = handle.read()
+    check(
+        "editor completion menu accepts a candidate",
+        code == 0 and content == "alpha alphabet alpha\n" and b"> alpha" in out,
+        repr(content),
+    )
+
+
+def test_spell_check():
+    directory = tempfile.mkdtemp(prefix="nano-emacs-e2e-")
+    dictionary = os.path.join(directory, "words")
+    with open(dictionary, "w", encoding="utf-8") as handle:
+        handle.write("hello\nworld\n")
+    config = os.path.join(directory, "config")
+    with open(config, "w", encoding="utf-8") as handle:
+        handle.write(f"spell_check = true\nspell_dictionary = {dictionary}\n")
+    path = os.path.join(directory, "doc.md")
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write("hello wurld\n")
+    previous = os.environ.get("NANO_EMACS_CONFIG")
+    os.environ["NANO_EMACS_CONFIG"] = config
+    try:
+        code, out, _ = run(
+            [BIN, path],
+            [b"\x1bxnext-spelling-error\r", b"\x1b$", b"\r", b"\x18\x13", b"\x18\x03"],
+            cols=COLS,
+            rows=ROWS,
+            expect=b"nemacs",
+        )
+    finally:
+        if previous is None:
+            os.environ.pop("NANO_EMACS_CONFIG", None)
+        else:
+            os.environ["NANO_EMACS_CONFIG"] = previous
+    with open(path, encoding="utf-8") as handle:
+        content = handle.read()
+    check(
+        "spell check underlines and suggests words",
+        code == 0
+        and content == "hello world\n"
+        and b";4;38;5;203" in out
+        and b"Replace 'wurld' with: " in out,
+        repr(content),
+    )
 
 
 def test_escape_meta_word_motion():
@@ -361,6 +436,8 @@ def main():
     test_mark_and_kill_region()
     test_region_delete_and_copy()
     test_find_file_tab_completion()
+    test_editor_completion_menu()
+    test_spell_check()
     test_escape_meta_word_motion()
     test_search_and_insert()
     test_help_overlay()

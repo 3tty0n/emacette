@@ -12,6 +12,9 @@ viewing, and small edits. The binary is `nemacs`.
 - CJK/full-width text, tabs, horizontal scrolling, and line numbers.
 - Auto-fill and optional [soft wrapping](docs/configuration.md#soft-wrapping)
   of long lines.
+- Minibuffer completion lists and optional [editor completion](docs/completion.md).
+- English [spell checking](docs/spelling.md) for prose modes such as Markdown
+  and LaTeX.
 - Git commit mode with save and abort shortcuts.
 - UTF-8 input; CRLF line endings are preserved.
 
@@ -48,8 +51,10 @@ See [Git integration](docs/git.md) for the full commit workflow.
 ## Documentation
 
 - [Key bindings](docs/keys.md) — full key list, regions, search, and minibuffer editing.
-- [Commands and minibuffer completion](docs/commands.md) — `M-x` commands and Tab completion.
-- [Configuration](docs/configuration.md) — config paths, options, auto-fill, and wrapping.
+- [Commands](docs/commands.md) — `M-x` commands for files, regions, display, and spelling.
+- [Completion](docs/completion.md) — minibuffer lists and optional editor completion.
+- [Spelling](docs/spelling.md) — English dictionaries, highlighting, and corrections.
+- [Configuration](docs/configuration.md) — config paths, options, auto-fill, wrapping, completion, and spelling.
 - [Languages](docs/languages.md) — supported languages and detection rules.
 - [Installation](docs/install.md) — source installs, prebuilt binaries, and the installer.
 - [Git integration](docs/git.md) — editor setup and commit behaviour.
@@ -60,6 +65,8 @@ See [Git integration](docs/git.md) for the full commit workflow.
 - One buffer; no window splits or multiple buffers.
 - UTF-8 only; binary and non-UTF-8 files are rejected.
 - Kill ring only; no system clipboard integration.
+- Editor completion is buffer-local; there is no language server or fuzzy matching.
+- Spell checking is English-only and needs a word list or hunspell dictionary.
 - No regex search, macros, rectangles, org-mode, or Emacs Lisp.
 - Not intended for very large files: a 200k-line, 7.6 MB file takes about
   100 ms to first paint.

@@ -1,8 +1,9 @@
-# Commands and minibuffer completion
+# Commands
 
 Part of [nano-emacs](../README.md).
 
-`M-x` runs a command by name. `TAB` completes names and paths.
+`M-x` runs a command by name. See [Completion](completion.md) for editor and
+minibuffer completion, and [Spelling](spelling.md) for spell checking.
 
 ## Files and buffers
 
@@ -31,6 +32,20 @@ Part of [nano-emacs](../README.md).
 - `auto-fill-mode` — toggle automatic hard wrapping at `fill_column`.
 - `toggle-auto-fill` — alias for `auto-fill-mode`.
 - `toggle-truncate-lines` — switch between horizontal scrolling and soft wrapping.
+- `toggle-editor-completion` — enable or disable editor completion.
+- `complete-symbol` — show completion candidates at point.
+- `completion-at-point` — alias for `complete-symbol`.
+- `flyspell-mode` — enable or disable spell checking in prose modes.
+- `spell-check-mode` — alias for `flyspell-mode`.
+- `toggle-spell-check` — alias for `flyspell-mode`.
+- `ispell-word` — prompt to replace the word at point.
+- `spell-word` — alias for `ispell-word`.
+- `ispell-next` — jump to the next misspelled word.
+- `next-spelling-error` — alias for `ispell-next`.
+- `ispell-previous` — jump to the previous misspelled word.
+- `previous-spelling-error` — alias for `ispell-previous`.
+- `ispell-buffer` — check the whole buffer and report the count.
+- `spell-check-buffer` — alias for `ispell-buffer`.
 
 ## Regions
 
@@ -48,35 +63,8 @@ Part of [nano-emacs](../README.md).
 - `help` — open the help overlay.
 - `describe-bindings` — alias for `help`.
 
-## Minibuffer completion
+## Related documentation
 
-`TAB` completes in `M-x`, `find-file`, and `write-file`.
-
-- The first `TAB` extends the input to the longest common prefix.
-- If several candidates remain, the echo area shows their count and a preview.
-- The next `TAB` selects the first candidate.
-- Further `TAB` presses cycle forward through the candidates.
-- `S-TAB` cycles backward.
-- Editing, deleting, or moving the cursor resets the completion cycle.
-- `RET` accepts the current input.
-- A unique candidate is inserted immediately.
-
-### Path completion
-
-- Relative paths are resolved against the current buffer's directory.
-- Absolute paths and `~/` paths work.
-- `.`, `..`, and hidden files (when the input starts with `.`) are supported.
-- Directory candidates end with `/`.
-- Pressing `TAB` on a completed directory lists its contents.
-
-### Command completion
-
-- Command names from the list above are completed.
-- `TAB` again cycles through matching commands.
-- `S-TAB` cycles backwards.
-
-### Candidate hints
-
-- The echo area shows `N candidates: ...` while a completion is pending.
-- Once cycling, it shows the position and preview, for example
-  `[2/4] alpha.txt alphabet.txt ...`.
+- [Completion](completion.md) — minibuffer lists, candidate cycling, and optional editor completion.
+- [Spelling](spelling.md) — dictionary discovery, highlighting, and `M-$`.
+- [Key bindings](keys.md) — every key, including region and search behaviour.

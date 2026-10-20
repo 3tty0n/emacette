@@ -59,6 +59,15 @@ impl Renderer {
         editor.view.line_numbers = editor.config.line_numbers;
         editor.view.highlight_trailing_ws = editor.config.highlight_trailing_ws;
         editor.view.truncate_lines = editor.config.truncate_lines;
+        let menu_rows = if editor.overlay.is_some() {
+            0
+        } else {
+            editor
+                .completion_menu_count()
+                .min(6)
+                .min(editor.view.height.saturating_sub(3))
+        };
+        editor.view.menu_rows = menu_rows;
         editor.sync_highlighter();
         editor.view.ensure_visible(&editor.buffer);
 
@@ -70,7 +79,9 @@ impl Renderer {
         let terminal_height = editor.view.height;
         // The bottom two rows are the mode line and the echo area.  On a
         // terminal with fewer than three rows there is no text area.
-        let body_rows = terminal_height.saturating_sub(2);
+        let body_rows = terminal_height
+            .saturating_sub(2)
+            .saturating_sub(editor.view.menu_rows);
 
         let mut rows: Vec<String> = Vec::with_capacity(terminal_height);
         let mut cursor = None;
@@ -78,6 +89,7 @@ impl Renderer {
             rows.extend(build_help_rows(editor, body_rows, overlay.scroll));
         } else {
             rows.extend(build_text_rows(editor, body_rows));
+            rows.extend(build_completion_rows(editor, menu_rows));
             cursor =
                 buffer_cursor(editor).filter(|&(_, y)| body_rows > 0 && y as usize <= body_rows);
         }
@@ -196,7 +208,7 @@ fn build_truncated_text_rows(editor: &mut Editor, body_rows: usize) -> Vec<Strin
     let current_row = editor.buffer.point.row;
     let left = editor.view.left;
     let tab_width = editor.view.tab_width;
-    let theme = &editor.theme;
+    let theme = editor.theme.clone();
     let highlight_trailing = editor.view.highlight_trailing_ws;
     let mut rows = Vec::with_capacity(body_rows);
 
@@ -224,6 +236,7 @@ fn build_truncated_text_rows(editor: &mut Editor, body_rows: usize) -> Vec<Strin
             let lines = &editor.buffer.lines;
             editor.highlighter.tokens(row, lines).to_vec()
         };
+        let spell = editor.spell_spans(row);
         let chars = &editor.buffer.lines[row];
 
         let region = editor.buffer.region().and_then(|(start, end)| {
@@ -254,10 +267,11 @@ fn build_truncated_text_rows(editor: &mut Editor, body_rows: usize) -> Vec<Strin
             left,
             body_width,
             tab_width,
-            theme,
+            &theme,
             region,
             search,
             highlight_trailing,
+            &spell,
             0,
             chars.len(),
             0,
@@ -274,7 +288,7 @@ fn build_wrapped_text_rows(editor: &mut Editor, body_rows: usize) -> Vec<String>
     let digits = line_count.max(1).to_string().len();
     let current_row = editor.buffer.point.row;
     let tab_width = editor.view.tab_width;
-    let theme = &editor.theme;
+    let theme = editor.theme.clone();
     let highlight_trailing = editor.view.highlight_trailing_ws;
     let mut rows = Vec::with_capacity(body_rows);
 
@@ -295,6 +309,7 @@ fn build_wrapped_text_rows(editor: &mut Editor, body_rows: usize) -> Vec<String>
             let lines = &editor.buffer.lines;
             editor.highlighter.tokens(row, lines).to_vec()
         };
+        let spell = editor.spell_spans(row);
         let chars = &editor.buffer.lines[row];
         if start_idx > chars.len() {
             start_idx = chars.len();
@@ -344,10 +359,11 @@ fn build_wrapped_text_rows(editor: &mut Editor, body_rows: usize) -> Vec<String>
             0,
             body_width,
             tab_width,
-            theme,
+            &theme,
             region,
             search,
             highlight_trailing,
+            &spell,
             start_idx,
             end_idx,
             start_display,
@@ -380,6 +396,7 @@ fn draw_line(
     region: Option<(usize, usize)>,
     search: Option<(usize, usize)>,
     highlight_trailing: bool,
+    spell: &[(usize, usize)],
     start_idx: usize,
     end_idx: usize,
     start_display: usize,
@@ -412,6 +429,7 @@ fn draw_line(
 
     let mut emitted = 0usize;
     let mut span_idx = 0usize;
+    let mut spell_idx = 0usize;
     let mut current = theme.text;
     let mut styled = false;
 
@@ -429,6 +447,19 @@ fn draw_line(
             Some(span) if span.start <= idx => theme.tok(span.kind),
             _ => theme.text,
         };
+
+        while spell_idx < spell.len() && spell[spell_idx].1 <= idx {
+            spell_idx += 1;
+        }
+        if spell
+            .get(spell_idx)
+            .is_some_and(|(start, end)| *start <= idx && idx < *end)
+        {
+            style.underline = true;
+            if let Some(fg) = theme.spell.fg {
+                style.fg = Some(fg);
+            }
+        }
 
         if let Some((from, to)) = search {
             if idx >= from && idx < to {
@@ -566,6 +597,12 @@ fn build_modeline(editor: &Editor) -> String {
     }
     if !editor.config.truncate_lines {
         flags.push_str("Wrap ");
+    }
+    if editor.config.editor_completion {
+        flags.push_str("Comp ");
+    }
+    if editor.spell.enabled && editor.mode.is_prose() {
+        flags.push_str("Spell ");
     }
 
     let full_left = format!(" nemacs  {name} {star}  {position}");
@@ -734,6 +771,59 @@ fn draw_segments(
     written
 }
 
+fn build_completion_rows(editor: &Editor, menu_rows: usize) -> Vec<String> {
+    if menu_rows == 0 {
+        return Vec::new();
+    }
+    let width = editor.view.width.max(1);
+    let Some((candidates, selected)) = editor.completion_menu() else {
+        return vec![String::new(); menu_rows];
+    };
+    if candidates.is_empty() {
+        return vec![String::new(); menu_rows];
+    }
+    let selected = selected.unwrap_or(0).min(candidates.len() - 1);
+    let start = if selected >= menu_rows {
+        selected + 1 - menu_rows
+    } else {
+        0
+    };
+    let theme = &editor.theme;
+    let mut rows = Vec::with_capacity(menu_rows);
+    for slot in 0..menu_rows {
+        let index = start + slot;
+        let mut row = String::new();
+        if let Some(candidate) = candidates.get(index) {
+            let style = if index == selected {
+                theme.completion_selected
+            } else {
+                theme.completion
+            };
+            push_style(&mut row, style);
+            let marker = if width >= 2 {
+                if index == selected {
+                    "> "
+                } else {
+                    "  "
+                }
+            } else {
+                ""
+            };
+            let marker_width = str_width(marker);
+            let text = truncate_to_width(candidate, width.saturating_sub(marker_width));
+            row.push_str(marker);
+            row.push_str(&text);
+            let pad = width.saturating_sub(marker_width + str_width(&text));
+            row.push_str(&" ".repeat(pad));
+        } else {
+            push_style(&mut row, theme.completion);
+            row.push_str(&" ".repeat(width));
+        }
+        rows.push(row);
+    }
+    rows
+}
+
 fn build_help_rows(editor: &Editor, body_rows: usize, scroll: usize) -> Vec<String> {
     let theme = &editor.theme;
     let width = editor.view.width;
@@ -789,11 +879,24 @@ fn truncate_to_width(text: &str, width: usize) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
     use crate::config::Config;
     use crate::editor::Editor;
-    use crate::key::Key;
+    use crate::key::{Key, KeyCode};
 
     use super::*;
+
+    fn temp_dictionary(words: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::SeqCst);
+        let dir =
+            std::env::temp_dir().join(format!("nano-emacs-render-{}-{}", std::process::id(), n));
+        std::fs::create_dir_all(&dir).unwrap();
+        let dictionary = dir.join("words");
+        std::fs::write(&dictionary, words).unwrap();
+        (dir, dictionary)
+    }
 
     fn strip_ansi(s: &str) -> String {
         let mut out = String::new();
@@ -832,10 +935,62 @@ mod tests {
     }
 
     #[test]
+    fn minibuffer_completion_menu_renders_candidates() {
+        let mut ed = Editor::from_text("", None, Config::default());
+        ed.handle_key(Key::alt('x'));
+        for c in "save-bu".chars() {
+            ed.handle_key(Key::ch(c));
+        }
+        ed.handle_key(Key::code(KeyCode::Tab));
+        let frame = render(&mut ed, 60, 12);
+        assert_eq!(ed.view.menu_rows, 2);
+        assert!(frame.cursor.is_some());
+        let plain = strip_ansi(&frame.output);
+        assert!(plain.contains("save-buffer"));
+        assert!(plain.contains("save-buffers-kill-terminal"));
+    }
+
+    #[test]
+    fn editor_completion_menu_reserves_body_rows() {
+        let config = Config {
+            editor_completion: true,
+            ..Config::default()
+        };
+        let mut ed = Editor::from_text("alpha alphabet ", None, config);
+        ed.buffer.set_point(crate::buffer::Point::new(0, 15));
+        for c in "al".chars() {
+            ed.handle_key(Key::ch(c));
+        }
+        let frame = render(&mut ed, 40, 10);
+        assert_eq!(ed.view.menu_rows, 2);
+        assert_eq!(ed.view.body_height(), 6);
+        let plain = strip_ansi(&frame.output);
+        assert!(plain.contains("> alpha"), "{plain:?}");
+        let (_, y) = frame.cursor.expect("cursor should stay visible");
+        assert!(y as usize <= ed.view.body_height());
+    }
+
+    #[test]
+    fn spell_errors_are_underlined() {
+        let (dir, dictionary) = temp_dictionary("hello\nworld\n");
+        let config = Config {
+            spell_check: true,
+            spell_dictionary: Some(dictionary.to_string_lossy().into_owned()),
+            ..Config::default()
+        };
+        let mut ed = Editor::from_text("hello wurld", Some(dir.join("doc.md")), config);
+        let frame = render(&mut ed, 40, 8);
+        assert!(frame.output.contains(";4;38;5;203"));
+        assert!(strip_ansi(&frame.output).contains("Spell"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn modeline_shows_fill_and_wrap_flags() {
         let config = Config {
             auto_fill: true,
             truncate_lines: false,
+            editor_completion: true,
             ..Config::default()
         };
         let mut ed = Editor::from_text("hello", None, config);
@@ -843,6 +998,7 @@ mod tests {
         let plain = strip_ansi(&frame.output);
         assert!(plain.contains("Fill"));
         assert!(plain.contains("Wrap"));
+        assert!(plain.contains("Comp"));
     }
 
     #[test]

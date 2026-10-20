@@ -49,3 +49,12 @@ From a checkout, or to pin a release:
 - `--uninstall` never removes `~/.config/nano-emacs`.
 
 The URLs above assume the repository is `3tty0n/nano-emacs`.
+
+## Optional dictionary for spell checking
+
+Spell checking needs an English word list or hunspell dictionary. Any of the
+paths listed in [Spelling](spelling.md) work.
+
+- Install a system dictionary such as `hunspell-en_US` or a `words` package.
+- Or set `spell_dictionary` in the configuration.
+- Or set `NANO_EMACS_DICT` for one run.

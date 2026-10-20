@@ -6,13 +6,15 @@ use std::io;
 use std::path::PathBuf;
 
 use crate::buffer::{Buffer, CaseOp, Coalesce, Point};
+use crate::completion::{self, EditorCompletion};
 use crate::config::Config;
 use crate::help;
 use crate::highlight::Highlighter;
 use crate::key::{Key, KeyCode};
 use crate::minibuffer::{CompletionState, Minibuffer, PromptKind};
 use crate::search::{find_backward, find_forward, find_last, SearchState};
-use crate::syntax::Lang;
+use crate::spell::{SpellChecker, SpellState};
+use crate::syntax::{Lang, Span};
 use crate::theme::Theme;
 use crate::view::{char_width, display_col, View};
 
@@ -29,6 +31,13 @@ pub enum Cmd {
     ToggleTrailingWs,
     ToggleAutoFill,
     ToggleTruncateLines,
+    ToggleEditorCompletion,
+    CompleteSymbol,
+    ToggleSpellCheck,
+    SpellWord,
+    NextSpellingError,
+    PreviousSpellingError,
+    SpellCheckBuffer,
     SetMark,
     KillRegion,
     CopyRegion,
@@ -59,6 +68,20 @@ pub const COMMANDS: &[(&str, Cmd)] = &[
     ("auto-fill-mode", Cmd::ToggleAutoFill),
     ("toggle-auto-fill", Cmd::ToggleAutoFill),
     ("toggle-truncate-lines", Cmd::ToggleTruncateLines),
+    ("toggle-editor-completion", Cmd::ToggleEditorCompletion),
+    ("complete-symbol", Cmd::CompleteSymbol),
+    ("completion-at-point", Cmd::CompleteSymbol),
+    ("flyspell-mode", Cmd::ToggleSpellCheck),
+    ("spell-check-mode", Cmd::ToggleSpellCheck),
+    ("toggle-spell-check", Cmd::ToggleSpellCheck),
+    ("ispell-word", Cmd::SpellWord),
+    ("spell-word", Cmd::SpellWord),
+    ("ispell-next", Cmd::NextSpellingError),
+    ("next-spelling-error", Cmd::NextSpellingError),
+    ("ispell-previous", Cmd::PreviousSpellingError),
+    ("previous-spelling-error", Cmd::PreviousSpellingError),
+    ("ispell-buffer", Cmd::SpellCheckBuffer),
+    ("spell-check-buffer", Cmd::SpellCheckBuffer),
     ("set-mark-command", Cmd::SetMark),
     ("kill-region", Cmd::KillRegion),
     ("kill-ring-save", Cmd::CopyRegion),
@@ -112,6 +135,9 @@ pub struct Editor {
     pub highlighter: Highlighter,
     pub minibuffer: Option<Minibuffer>,
     pub search: Option<SearchState>,
+    pub editor_completion: Option<EditorCompletion>,
+    pub spell: SpellState,
+    word_cache: Option<(u64, Vec<String>)>,
     confirm: Option<Confirm>,
     pub overlay: Option<Overlay>,
     pub message: String,
@@ -161,6 +187,13 @@ impl Editor {
         let mode = Lang::detect(buffer.path.as_deref(), Some(&first_line));
         let theme = Theme::by_name(config.theme);
         let version = buffer.version;
+        let spell_checker = if config.spell_check {
+            SpellChecker::load(config.spell_dictionary.as_deref())
+        } else {
+            None
+        };
+        let spell_missing = config.spell_check && spell_checker.is_none();
+        let spell = SpellState::new(config.spell_check, spell_checker);
         let view = View {
             line_numbers: config.line_numbers,
             tab_width: config.tab_width,
@@ -168,7 +201,7 @@ impl Editor {
             truncate_lines: config.truncate_lines,
             ..View::default()
         };
-        Self {
+        let mut editor = Self {
             buffer,
             mode,
             theme,
@@ -177,6 +210,9 @@ impl Editor {
             config,
             minibuffer: None,
             search: None,
+            editor_completion: None,
+            spell,
+            word_cache: None,
             confirm: None,
             overlay: None,
             message: String::new(),
@@ -186,7 +222,11 @@ impl Editor {
             exit_code: 0,
             history: Vec::new(),
             needs_redraw: false,
+        };
+        if spell_missing {
+            editor.message = "Spell check: no English dictionary found".into();
         }
+        editor
     }
 
     // ------------------------------------------------------------- helpers
@@ -240,6 +280,9 @@ impl Editor {
         self.view.top_offset = 0;
         self.view.left = 0;
         self.search = None;
+        self.editor_completion = None;
+        self.word_cache = None;
+        self.spell.clear();
         self.prefix = None;
         self.needs_redraw = true;
     }
@@ -284,6 +327,11 @@ impl Editor {
         };
         self.buffer.begin_command();
         self.handle_normal(key);
+        if (self.config.editor_completion || self.editor_completion.is_some())
+            && (self_insert || backspace)
+        {
+            self.update_editor_completion(false);
+        }
         self.buffer.end_command(coalesce);
     }
 
@@ -303,12 +351,278 @@ impl Editor {
             self.update_search();
             return;
         }
+        self.editor_completion = None;
         self.buffer.begin_command();
         self.buffer.insert_text(text);
         self.buffer.end_command(None);
     }
 
+    fn handle_editor_completion_key(&mut self, key: Key) -> bool {
+        let word_char = matches!(
+            key.code,
+            KeyCode::Char(c) if !key.ctrl && !key.alt && (completion::is_word_char(c) || c == '\\')
+        );
+        if word_char || (key.code == KeyCode::Backspace && !key.alt) {
+            return false;
+        }
+        match key.code {
+            KeyCode::Tab | KeyCode::Enter if !key.ctrl && !key.alt => {
+                self.accept_editor_completion();
+            }
+            KeyCode::Esc => {
+                self.editor_completion = None;
+                self.message = "Quit".into();
+            }
+            KeyCode::Char('g') if key.ctrl => {
+                self.editor_completion = None;
+                self.message = "Quit".into();
+            }
+            KeyCode::Up => self.move_editor_completion(false),
+            KeyCode::Down => self.move_editor_completion(true),
+            KeyCode::Char('p') if key.ctrl => self.move_editor_completion(false),
+            KeyCode::Char('n') if key.ctrl => self.move_editor_completion(true),
+            _ => {
+                self.editor_completion = None;
+                return false;
+            }
+        }
+        true
+    }
+
+    fn move_editor_completion(&mut self, forward: bool) {
+        if let Some(completion) = self.editor_completion.as_mut() {
+            if forward {
+                completion.next();
+            } else {
+                completion.previous();
+            }
+        }
+    }
+
+    fn accept_editor_completion(&mut self) {
+        let Some(completion) = self.editor_completion.take() else {
+            return;
+        };
+        let Some(word) = completion.selected().map(str::to_string) else {
+            return;
+        };
+        self.buffer
+            .replace_range(completion.start, completion.end, &word);
+        self.message = format!("Completed: {word}");
+    }
+
+    fn update_editor_completion(&mut self, force: bool) {
+        if self.minibuffer.is_some() || self.overlay.is_some() {
+            self.editor_completion = None;
+            return;
+        }
+        let row = self.buffer.point.row;
+        let (start, prefix) = {
+            let line = &self.buffer.lines[row];
+            completion::prefix_at(line, self.buffer.point.col)
+        };
+        let minimum = if force { 1 } else { 2 };
+        if prefix.chars().count() < minimum {
+            self.editor_completion = None;
+            return;
+        }
+        let words = self.completion_words();
+        let candidates = completion::candidates(&prefix, &words, 100);
+        if candidates.is_empty() {
+            self.editor_completion = None;
+            if force {
+                self.message = "No completion at point".into();
+            }
+            return;
+        }
+        self.editor_completion = Some(EditorCompletion {
+            candidates,
+            index: 0,
+            start: Point::new(row, start),
+            end: self.buffer.point,
+            prefix,
+        });
+    }
+
+    fn completion_words(&mut self) -> Vec<String> {
+        if let Some((version, words)) = &self.word_cache {
+            if *version == self.buffer.version {
+                return words.clone();
+            }
+        }
+        let words = completion::collect_words(&self.buffer.lines, self.mode);
+        self.word_cache = Some((self.buffer.version, words.clone()));
+        words
+    }
+
+    /// Candidates currently shown in the completion menu, if any.
+    pub fn completion_menu(&self) -> Option<(&[String], Option<usize>)> {
+        if let Some(minibuffer) = &self.minibuffer {
+            if let Some(completion) = &minibuffer.completion {
+                if !completion.candidates.is_empty() {
+                    return Some((&completion.candidates, completion.index));
+                }
+            }
+        }
+        if let Some(completion) = &self.editor_completion {
+            if !completion.candidates.is_empty() {
+                return Some((&completion.candidates, Some(completion.index)));
+            }
+        }
+        None
+    }
+
+    pub fn completion_menu_count(&self) -> usize {
+        self.completion_menu()
+            .map(|(candidates, _)| candidates.len())
+            .unwrap_or(0)
+    }
+
+    pub fn spell_spans(&mut self, row: usize) -> Vec<(usize, usize)> {
+        if !self.spell.enabled || !self.mode.is_prose() || row >= self.buffer.line_count() {
+            return Vec::new();
+        }
+        self.sync_highlighter();
+        let syntax: Vec<Span> = {
+            let lines = &self.buffer.lines;
+            self.highlighter.tokens(row, lines).to_vec()
+        };
+        let line = &self.buffer.lines[row];
+        self.spell.spans(self.buffer.version, row, line, &syntax)
+    }
+
+    fn enable_spell_check(&mut self) -> bool {
+        if self.spell.enabled {
+            return true;
+        }
+        if !self.mode.is_prose() {
+            self.message = "Spell check is available in text modes".into();
+            return false;
+        }
+        if self.spell.checker.is_none() {
+            self.spell.checker = SpellChecker::load(self.config.spell_dictionary.as_deref());
+        }
+        if self.spell.checker.is_some() {
+            self.spell.enabled = true;
+            self.spell.clear();
+            true
+        } else {
+            self.message =
+                "No English dictionary found (install one or set spell_dictionary)".into();
+            false
+        }
+    }
+
+    fn toggle_spell_check(&mut self) {
+        if self.spell.enabled {
+            self.spell.enabled = false;
+            self.spell.clear();
+            self.message = "Spell check off".into();
+        } else if self.enable_spell_check() {
+            let source = self
+                .spell
+                .checker
+                .as_ref()
+                .map(|checker| checker.source().display().to_string())
+                .unwrap_or_default();
+            self.message = format!("Spell check on ({source})");
+        }
+    }
+
+    fn spell_word(&mut self) {
+        if !self.enable_spell_check() {
+            return;
+        }
+        let row = self.buffer.point.row;
+        let found = completion::word_at(&self.buffer.lines[row], self.buffer.point.col);
+        let Some((start, end, word)) = found else {
+            self.message = "No word at point".into();
+            return;
+        };
+        let (correct, suggestions) = {
+            let Some(checker) = self.spell.checker.as_ref() else {
+                return;
+            };
+            (checker.is_correct(&word), checker.suggestions(&word, 8))
+        };
+        if correct {
+            self.message = format!("Correct: {word}");
+        } else if suggestions.is_empty() {
+            self.message = format!("Misspelled: {word} (no suggestions)");
+        } else {
+            self.message.clear();
+            let mut minibuffer = Minibuffer::new(
+                format!("Replace '{word}' with: "),
+                PromptKind::SpellReplace {
+                    start: Point::new(row, start),
+                    end: Point::new(row, end),
+                },
+                &suggestions[0],
+            );
+            minibuffer.hint = suggestions.join("  ");
+            self.minibuffer = Some(minibuffer);
+        }
+    }
+
+    pub fn spell_check_buffer(&mut self) -> usize {
+        if !self.enable_spell_check() {
+            return 0;
+        }
+        let mut count = 0;
+        for row in 0..self.buffer.line_count() {
+            count += self.spell_spans(row).len();
+        }
+        self.message = format!("{count} misspelled word(s)");
+        count
+    }
+
+    fn next_spelling_error(&mut self, forward: bool) {
+        if !self.enable_spell_check() {
+            return;
+        }
+        let current = self.buffer.point;
+        let row_count = self.buffer.line_count();
+        let mut found = None;
+        if forward {
+            for row in current.row..row_count {
+                let errors = self.spell_spans(row);
+                for (start, _) in errors {
+                    if row > current.row || start > current.col {
+                        found = Some((row, start));
+                        break;
+                    }
+                }
+                if found.is_some() {
+                    break;
+                }
+            }
+        } else {
+            for row in (0..=current.row.min(row_count.saturating_sub(1))).rev() {
+                let errors = self.spell_spans(row);
+                for (start, end) in errors.into_iter().rev() {
+                    if row < current.row || end <= current.col {
+                        found = Some((row, start));
+                        break;
+                    }
+                }
+                if found.is_some() {
+                    break;
+                }
+            }
+        }
+        match found {
+            Some((row, col)) => {
+                self.buffer.set_point(Point::new(row, col));
+                self.message = format!("Misspelled word at L{} C{}", row + 1, col + 1);
+            }
+            None => self.message = "No more misspelled words".into(),
+        }
+    }
+
     fn handle_normal(&mut self, mut key: Key) {
+        if self.editor_completion.is_some() && self.handle_editor_completion_key(key) {
+            return;
+        }
         self.message.clear();
         if self.meta_prefix {
             self.meta_prefix = false;
@@ -470,6 +784,7 @@ impl Editor {
             }
             'x' => self.start_mx(),
             'm' => self.buffer.back_to_indentation(),
+            '$' => self.spell_word(),
             _ => {
                 self.message = format!("M-{} is unbound", c);
             }
@@ -1093,6 +1408,13 @@ impl Editor {
                     Err(e) => self.message = format!("Write failed: {e}"),
                 }
             }
+            PromptKind::SpellReplace { start, end } => {
+                if trimmed.is_empty() {
+                    return;
+                }
+                self.buffer.replace_range(start, end, &trimmed);
+                self.message = format!("Replaced with {trimmed}");
+            }
         }
     }
 
@@ -1111,7 +1433,7 @@ impl Editor {
         match kind {
             PromptKind::Mx => self.complete_command(),
             PromptKind::FindFile | PromptKind::WriteFile { .. } => self.complete_path(),
-            PromptKind::GotoLine => {}
+            PromptKind::GotoLine | PromptKind::SpellReplace { .. } => {}
         }
     }
 
@@ -1399,6 +1721,28 @@ impl Editor {
                     }
                 );
             }
+            Cmd::ToggleEditorCompletion => {
+                self.config.editor_completion = !self.config.editor_completion;
+                if !self.config.editor_completion {
+                    self.editor_completion = None;
+                }
+                self.message = format!(
+                    "Editor completion {}",
+                    if self.config.editor_completion {
+                        "on"
+                    } else {
+                        "off"
+                    }
+                );
+            }
+            Cmd::CompleteSymbol => self.update_editor_completion(true),
+            Cmd::ToggleSpellCheck => self.toggle_spell_check(),
+            Cmd::SpellWord => self.spell_word(),
+            Cmd::NextSpellingError => self.next_spelling_error(true),
+            Cmd::PreviousSpellingError => self.next_spelling_error(false),
+            Cmd::SpellCheckBuffer => {
+                self.spell_check_buffer();
+            }
             Cmd::SetMark => {
                 self.buffer.set_mark();
                 self.message = "Mark set".into();
@@ -1453,6 +1797,9 @@ impl Editor {
         if mode != self.mode {
             self.mode = mode;
             self.highlighter = Highlighter::new(mode, self.buffer.version);
+            self.spell.clear();
+            self.word_cache = None;
+            self.editor_completion = None;
         }
     }
 
@@ -1693,6 +2040,130 @@ mod tests {
         let mb = ed.minibuffer.as_ref().unwrap();
         assert!(mb.completion.is_none());
         assert!(mb.hint.is_empty());
+    }
+
+    #[test]
+    fn editor_completion_accepts_with_tab() {
+        let config = Config {
+            editor_completion: true,
+            ..Config::default()
+        };
+        let mut ed = Editor::from_text("alpha alphabet ", None, config);
+        ed.buffer.set_point(Point::new(0, 15));
+        for c in "al".chars() {
+            ed.handle_key(Key::ch(c));
+        }
+        assert!(ed.editor_completion.is_some());
+        ed.handle_key(Key::code(KeyCode::Tab));
+        assert_eq!(ed.buffer_text(), "alpha alphabet alpha");
+        assert!(ed.editor_completion.is_none());
+    }
+
+    #[test]
+    fn editor_completion_cycles_with_down() {
+        let config = Config {
+            editor_completion: true,
+            ..Config::default()
+        };
+        let mut ed = Editor::from_text("alpha alphabet ", None, config);
+        ed.buffer.set_point(Point::new(0, 15));
+        for c in "al".chars() {
+            ed.handle_key(Key::ch(c));
+        }
+        ed.handle_key(Key::code(KeyCode::Down));
+        ed.handle_key(Key::code(KeyCode::Tab));
+        assert_eq!(ed.buffer_text(), "alpha alphabet alphabet");
+    }
+
+    #[test]
+    fn complete_symbol_works_when_auto_completion_is_off() {
+        let mut ed = editor("alpha alphabet al");
+        ed.buffer.set_point(Point::new(0, 17));
+        ed.run_mx("complete-symbol");
+        assert!(ed.editor_completion.is_some());
+        ed.handle_key(Key::code(KeyCode::Tab));
+        assert_eq!(ed.buffer_text(), "alpha alphabet alpha");
+    }
+
+    #[test]
+    fn editor_completion_is_off_by_default_and_clears_on_space() {
+        let mut ed = editor("alpha ");
+        for c in "al".chars() {
+            ed.handle_key(Key::ch(c));
+        }
+        assert!(ed.editor_completion.is_none());
+
+        let config = Config {
+            editor_completion: true,
+            ..Config::default()
+        };
+        let mut ed = Editor::from_text("alpha ", None, config);
+        for c in "al".chars() {
+            ed.handle_key(Key::ch(c));
+        }
+        assert!(ed.editor_completion.is_some());
+        ed.handle_key(Key::ch(' '));
+        assert!(ed.editor_completion.is_none());
+    }
+
+    #[test]
+    fn spell_check_marks_and_navigates() {
+        let dir = temp_dir();
+        let dictionary = dir.join("words");
+        fs::write(&dictionary, "hello\nworld\n").unwrap();
+        let config = Config {
+            spell_check: true,
+            spell_dictionary: Some(dictionary.to_string_lossy().into_owned()),
+            ..Config::default()
+        };
+        let mut ed = Editor::from_text("hello wurld\n", Some(dir.join("doc.md")), config);
+        assert!(ed.spell.enabled);
+        assert_eq!(ed.spell_spans(0), vec![(6, 11)]);
+
+        ed.buffer.set_point(Point::new(0, 0));
+        ed.run_mx("next-spelling-error");
+        assert_eq!(ed.buffer.point, Point::new(0, 6));
+        ed.handle_key(Key::alt('$'));
+        assert!(ed.minibuffer.is_some());
+        assert_eq!(ed.minibuffer_text().as_deref(), Some("world"));
+        ed.handle_key(Key::code(KeyCode::Enter));
+        assert_eq!(ed.buffer_text(), "hello world\n");
+        assert!(ed.message.contains("Replaced"));
+        assert_eq!(ed.spell_check_buffer(), 0);
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn spell_check_toggles_with_a_dictionary() {
+        let dir = temp_dir();
+        let dictionary = dir.join("words");
+        fs::write(&dictionary, "hello\nworld\n").unwrap();
+        let config = Config {
+            spell_dictionary: Some(dictionary.to_string_lossy().into_owned()),
+            ..Config::default()
+        };
+        let mut ed = Editor::from_text("hello wurld\n", Some(dir.join("doc.md")), config);
+        assert!(!ed.spell.enabled);
+        ed.run_mx("flyspell-mode");
+        assert!(ed.spell.enabled);
+        ed.run_mx("flyspell-mode");
+        assert!(!ed.spell.enabled);
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn spell_check_skips_latex_commands() {
+        let dir = temp_dir();
+        let dictionary = dir.join("words");
+        fs::write(&dictionary, "section\n").unwrap();
+        let config = Config {
+            spell_check: true,
+            spell_dictionary: Some(dictionary.to_string_lossy().into_owned()),
+            ..Config::default()
+        };
+        let mut ed = Editor::from_text("\\section{wurld}\n", Some(dir.join("doc.tex")), config);
+        assert_eq!(ed.spell_spans(0), vec![(9, 14)]);
+        fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

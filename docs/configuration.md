@@ -26,6 +26,9 @@ auto_indent = true
 auto_fill = false
 fill_column = 70
 truncate_lines = true        # false = soft-wrap long lines
+editor_completion = false
+spell_check = false
+# spell_dictionary = ~/.config/nano-emacs/en.dic
 theme = dark                 # dark or light
 comment_char = "#"           # match core.commentChar
 confirm_on_quit = true
@@ -43,11 +46,21 @@ confirm_on_quit = true
 - `fill_column` (`fill-column`) — auto-fill column; default `70`; range `1`–`1000`.
 - `truncate_lines` (`truncate-lines`, `truncate`) — truncate long lines and
   scroll horizontally; set to `false` for soft wrapping; default `true`.
+- `editor_completion` (`editor-completion`, `completion_in_editor`) — show
+  word-completion candidates while typing; default `false`. See
+  [Completion](completion.md).
+- `spell_check` (`spell-check`, `spellcheck`) — highlight misspelled words in
+  prose modes; default `false`. See [Spelling](spelling.md).
+- `spell_dictionary` (`spell-dictionary`) — path to a word list or hunspell
+  `.dic` file; default is automatic discovery.
 - `theme` — `dark` or `light`; default `dark`.
 - `comment_char` (`comment-char`) — comment character used by git commit
   templates; default `#`.
 - `confirm_on_quit` (`confirm-on-quit`) — ask before quitting with unsaved
   changes; default `true`.
+
+The mode line shows `Fill`, `Wrap`, `Comp`, and `Spell` while the corresponding
+modes are active.
 
 ## Auto-fill
 
