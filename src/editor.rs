@@ -15,7 +15,7 @@ use crate::lsp::{Diagnostic, LspClient, LspEvent, Severity};
 use crate::minibuffer::{CompletionState, Minibuffer, PromptKind};
 use crate::search::{find_backward, find_forward, find_last, SearchState};
 use crate::spell::{SpellChecker, SpellState};
-use crate::syntax::{Lang, Span};
+use crate::syntax::{Lang, Span, Tok};
 use crate::theme::Theme;
 use crate::view::{char_width, display_col, View};
 
@@ -142,6 +142,13 @@ pub struct Overlay {
     pub scroll: usize,
 }
 
+struct ParenCache {
+    version: u64,
+    rows: Vec<Vec<u8>>,
+    depth: u8,
+    next_row: usize,
+}
+
 struct TabState {
     buffer: Option<Buffer>,
     top: usize,
@@ -182,6 +189,7 @@ pub struct Editor {
     last_lsp_version: u64,
     tabs: Vec<TabState>,
     active_tab: usize,
+    paren_cache: Option<ParenCache>,
     confirm: Option<Confirm>,
     pub overlay: Option<Overlay>,
     pub message: String,
@@ -276,6 +284,7 @@ impl Editor {
                 spell: SpellState::default(),
             }],
             active_tab: 0,
+            paren_cache: None,
             confirm: None,
             overlay: None,
             message: String::new(),
@@ -355,6 +364,7 @@ impl Editor {
         self.search = None;
         self.editor_completion = None;
         self.word_cache = None;
+        self.paren_cache = None;
         self.spell.clear();
         self.configure_spell();
         self.start_lsp();
@@ -445,6 +455,7 @@ impl Editor {
         self.diagnostics = diagnostics;
         self.last_lsp_version = last_version;
         self.spell = spell;
+        self.paren_cache = None;
         self.lsp_completion = None;
         self.editor_completion = None;
         self.word_cache = None;
@@ -805,6 +816,69 @@ impl Editor {
             .unwrap_or(0)
     }
 
+    /// Rainbow-parenthesis depths for one Lisp line.  Only delimiters get a
+    /// depth; strings and comments are skipped.
+    pub fn rainbow_row(&mut self, row: usize) -> Option<Vec<u8>> {
+        if !self.mode.is_lisp() || row >= self.buffer.line_count() {
+            return None;
+        }
+        self.sync_highlighter();
+        let version = self.buffer.version;
+        if self.paren_cache.as_ref().map(|cache| cache.version) != Some(version) {
+            self.paren_cache = Some(ParenCache {
+                version,
+                rows: Vec::new(),
+                depth: 0,
+                next_row: 0,
+            });
+        }
+        loop {
+            let next_row = self.paren_cache.as_ref().map(|cache| cache.next_row)?;
+            if next_row > row || next_row >= self.buffer.line_count() {
+                break;
+            }
+            let spans: Vec<Span> = {
+                let lines = &self.buffer.lines;
+                self.highlighter.tokens(next_row, lines).to_vec()
+            };
+            let line = &self.buffer.lines[next_row];
+            let mut depth = self.paren_cache.as_ref().map(|cache| cache.depth)?;
+            let mut depths = vec![0u8; line.len()];
+            let mut span_idx = 0usize;
+            for (idx, c) in line.iter().enumerate() {
+                while span_idx < spans.len() && spans[span_idx].end <= idx {
+                    span_idx += 1;
+                }
+                let blocked = spans.get(span_idx).is_some_and(|span| {
+                    matches!(span.kind, Tok::String | Tok::Comment)
+                        && span.start <= idx
+                        && idx < span.end
+                });
+                if blocked {
+                    continue;
+                }
+                match c {
+                    '(' | '[' | '{' => {
+                        depths[idx] = depth;
+                        depth = depth.saturating_add(1);
+                    }
+                    ')' | ']' | '}' => {
+                        depth = depth.saturating_sub(1);
+                        depths[idx] = depth;
+                    }
+                    _ => {}
+                }
+            }
+            let cache = self.paren_cache.as_mut()?;
+            cache.rows.push(depths);
+            cache.depth = depth;
+            cache.next_row += 1;
+        }
+        self.paren_cache
+            .as_ref()
+            .and_then(|cache| cache.rows.get(row).cloned())
+    }
+
     pub fn spell_spans(&mut self, row: usize) -> Vec<(usize, usize)> {
         if !self.spell.enabled || !self.mode.is_prose() || row >= self.buffer.line_count() {
             return Vec::new();
@@ -1093,6 +1167,88 @@ impl Editor {
         }
     }
 
+    fn syntax_blocks_pairs(&mut self, row: usize, col: usize) -> bool {
+        self.sync_highlighter();
+        let spans: Vec<Span> = {
+            let lines = &self.buffer.lines;
+            self.highlighter.tokens(row, lines).to_vec()
+        };
+        if col == 0 {
+            let state = {
+                let lines = &self.buffer.lines;
+                self.highlighter.state_at(row, lines)
+            };
+            if state.string != 0 || state.comment != 0 {
+                return true;
+            }
+        }
+        let len = self.buffer.lines[row].len();
+        spans.iter().any(|span| {
+            matches!(span.kind, Tok::String | Tok::Comment)
+                && span.start < col
+                && (col < span.end || (col == len && span.end == len))
+        })
+    }
+
+    fn auto_pair_char(&mut self, c: char) -> bool {
+        if !self.settings.auto_pairs {
+            return false;
+        }
+        let opening = matches!(c, '(' | '[' | '{' | '"' | '\'' | '`');
+        let closing = matches!(c, ')' | ']' | '}' | '"' | '\'' | '`');
+        if !opening && !closing {
+            return false;
+        }
+        let row = self.buffer.point.row;
+        let col = self.buffer.point.col;
+        let line = &self.buffer.lines[row];
+        let next = line.get(col).copied();
+        let inside = self.syntax_blocks_pairs(row, col);
+        let quote = matches!(c, '"' | '\'' | '`');
+
+        if closing && next == Some(c) && (quote || !inside) {
+            self.buffer.move_right();
+            return true;
+        }
+        if inside {
+            return false;
+        }
+        if c == '\'' && (self.mode.is_lisp() || self.mode.is_prose()) {
+            return false;
+        }
+        let Some(close) = opening_pair(c) else {
+            return false;
+        };
+        self.buffer.insert_char(c);
+        self.buffer.insert_char(close);
+        self.buffer.move_left();
+        true
+    }
+
+    fn auto_pair_backspace(&mut self) -> bool {
+        if !self.settings.auto_pairs {
+            return false;
+        }
+        let row = self.buffer.point.row;
+        let col = self.buffer.point.col;
+        if col == 0 || col >= self.buffer.lines[row].len() {
+            return false;
+        }
+        let previous = self.buffer.lines[row][col - 1];
+        let next = self.buffer.lines[row][col];
+        if !matching_pair(previous, next) {
+            return false;
+        }
+        let quote = matches!(previous, '"' | '\'' | '`');
+        if !quote && self.syntax_blocks_pairs(row, col - 1) {
+            return false;
+        }
+        self.buffer.set_point(Point::new(row, col - 1));
+        self.buffer.delete_forward();
+        self.buffer.delete_forward();
+        true
+    }
+
     fn handle_normal(&mut self, mut key: Key) {
         if self.editor_completion.is_some() && self.handle_editor_completion_key(key) {
             return;
@@ -1120,9 +1276,11 @@ impl Editor {
             KeyCode::Char(c) if key.ctrl => self.handle_ctrl(c),
             KeyCode::Char(c) if key.alt => self.handle_alt(c),
             KeyCode::Char(c) => {
-                self.buffer.insert_char(c);
-                if self.settings.auto_fill {
-                    self.auto_fill();
+                if !self.auto_pair_char(c) {
+                    self.buffer.insert_char(c);
+                    if self.settings.auto_fill {
+                        self.auto_fill();
+                    }
                 }
             }
             KeyCode::Enter => {
@@ -1134,7 +1292,7 @@ impl Editor {
                 self.buffer.kill_word_backward();
             }
             KeyCode::Backspace => {
-                if !self.delete_active_region() {
+                if !self.delete_active_region() && !self.auto_pair_backspace() {
                     self.buffer.delete_backward();
                 }
             }
@@ -2543,6 +2701,7 @@ impl Editor {
             self.settings = self.config.settings_for(mode);
             self.highlighter = Highlighter::new(mode, self.buffer.version);
             self.apply_settings();
+            self.paren_cache = None;
             self.spell.clear();
             self.configure_spell();
             self.word_cache = None;
@@ -2607,6 +2766,25 @@ impl Editor {
     pub fn prompt_for_quit(&self) -> Option<&str> {
         self.confirm.as_ref().map(|c| c.question.as_str())
     }
+}
+
+fn opening_pair(c: char) -> Option<char> {
+    match c {
+        '(' => Some(')'),
+        '[' => Some(']'),
+        '{' => Some('}'),
+        '"' => Some('"'),
+        '\'' => Some('\''),
+        '`' => Some('`'),
+        _ => None,
+    }
+}
+
+fn matching_pair(open: char, close: char) -> bool {
+    matches!(
+        (open, close),
+        ('(', ')') | ('[', ']') | ('{', '}') | ('"', '"') | ('\'', '\'') | ('`', '`')
+    )
 }
 
 fn expand_tilde(input: &str) -> PathBuf {
@@ -2930,6 +3108,39 @@ mod tests {
         let mb = ed.minibuffer.as_ref().unwrap();
         assert!(mb.completion.is_none());
         assert_eq!(mb.hint, "No match");
+    }
+
+    #[test]
+    fn editor_completion_is_automatic_in_code_files() {
+        let mut ed = Editor::from_text("alpha ", Some(PathBuf::from("main.rs")), Config::default());
+        for c in "al".chars() {
+            ed.handle_key(Key::ch(c));
+        }
+        assert_eq!(ed.buffer_text(), "alalpha ");
+        assert!(ed.editor_completion.is_some());
+        assert!(ed.settings.editor_completion);
+
+        let mut markdown =
+            Editor::from_text("alpha ", Some(PathBuf::from("doc.md")), Config::default());
+        for c in "al".chars() {
+            markdown.handle_key(Key::ch(c));
+        }
+        assert!(markdown.editor_completion.is_none());
+        assert!(!markdown.settings.editor_completion);
+    }
+
+    #[test]
+    fn explicit_config_can_disable_code_completion() {
+        let config = Config {
+            editor_completion: false,
+            editor_completion_explicit: true,
+            ..Config::default()
+        };
+        let mut ed = Editor::from_text("alpha ", Some(PathBuf::from("main.rs")), config);
+        for c in "al".chars() {
+            ed.handle_key(Key::ch(c));
+        }
+        assert!(ed.editor_completion.is_none());
     }
 
     #[test]
@@ -3359,6 +3570,95 @@ mod tests {
         assert_eq!(ed.settings.fill_column, 24);
         assert!(ed.settings.editor_completion);
         assert_eq!(ed.settings.comment_start, "");
+    }
+
+    #[test]
+    fn auto_pairs_insert_skip_and_delete() {
+        let mut text = editor("aa");
+        text.buffer.set_point(Point::new(0, 0));
+        text.handle_key(Key::ch('a'));
+        assert_eq!(text.buffer_text(), "aaa");
+        assert_eq!(text.buffer.point, Point::new(0, 1));
+
+        let mut ed = editor("");
+        ed.handle_key(Key::ch('('));
+        assert_eq!(ed.buffer_text(), "()");
+        assert_eq!(ed.buffer.point, Point::new(0, 1));
+        ed.handle_key(Key::ch(')'));
+        assert_eq!(ed.buffer_text(), "()");
+        assert_eq!(ed.buffer.point, Point::new(0, 2));
+
+        let mut ed = editor("");
+        ed.handle_key(Key::ch('('));
+        ed.handle_key(Key::code(KeyCode::Backspace));
+        assert_eq!(ed.buffer_text(), "");
+        assert_eq!(ed.buffer.point, Point::new(0, 0));
+
+        let mut ed = editor("");
+        ed.handle_key(Key::ch('"'));
+        assert_eq!(ed.buffer_text(), "\"\"");
+        ed.handle_key(Key::ch('"'));
+        assert_eq!(ed.buffer_text(), "\"\"");
+        assert_eq!(ed.buffer.point, Point::new(0, 2));
+
+        let mut ed = editor("");
+        ed.handle_key(Key::ch('"'));
+        ed.handle_key(Key::code(KeyCode::Backspace));
+        assert_eq!(ed.buffer_text(), "");
+    }
+
+    #[test]
+    fn auto_pairs_respect_lisp_quotes_and_strings() {
+        let mut lisp = Editor::from_text("", Some(PathBuf::from("init.el")), Config::default());
+        lisp.handle_key(Key::ch('\''));
+        assert_eq!(lisp.buffer_text(), "'");
+
+        let mut rust = Editor::from_text("", Some(PathBuf::from("main.rs")), Config::default());
+        rust.handle_key(Key::ch('\''));
+        assert_eq!(rust.buffer_text(), "''");
+        rust.handle_key(Key::code(KeyCode::Backspace));
+        assert_eq!(rust.buffer_text(), "");
+
+        rust.handle_key(Key::ch('"'));
+        rust.handle_key(Key::ch('('));
+        rust.handle_key(Key::ch(')'));
+        assert_eq!(rust.buffer_text(), "\"()\"");
+
+        let mut comment =
+            Editor::from_text("// ", Some(PathBuf::from("main.rs")), Config::default());
+        comment.buffer.set_point(Point::new(0, 3));
+        comment.handle_key(Key::ch('('));
+        assert_eq!(comment.buffer_text(), "// (");
+    }
+
+    #[test]
+    fn auto_pairs_can_be_disabled() {
+        let config = Config {
+            auto_pairs: false,
+            ..Config::default()
+        };
+        let mut ed = Editor::from_text("", Some(PathBuf::from("main.rs")), config);
+        ed.handle_key(Key::ch('('));
+        assert_eq!(ed.buffer_text(), "(");
+    }
+
+    #[test]
+    fn lisp_rainbow_depths_follow_nesting() {
+        let mut ed = Editor::from_text(
+            "(a (b) c)\n",
+            Some(PathBuf::from("init.el")),
+            Config::default(),
+        );
+        assert_eq!(ed.mode, Lang::Lisp);
+        let depths = ed.rainbow_row(0).unwrap();
+        assert_eq!(depths[0], 0);
+        assert_eq!(depths[3], 1);
+        assert_eq!(depths[5], 1);
+        assert_eq!(depths[8], 0);
+
+        let mut markdown =
+            Editor::from_text("(a)\n", Some(PathBuf::from("doc.md")), Config::default());
+        assert!(markdown.rainbow_row(0).is_none());
     }
 
     #[test]

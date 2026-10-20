@@ -8,12 +8,13 @@ viewing, and small edits. The binary is `emacette`.
 - Single Rust binary; direct dependencies are `crossterm`, `serde_json`, and `unicode-width`.
 - Emacs-style key bindings, minibuffer, mark/region, kill ring, and undo.
 - Incremental rendering: only changed terminal rows are repainted.
-- Syntax highlighting for 39 [languages and formats](docs/languages.md).
+- Syntax highlighting for 40 [languages and formats](docs/languages.md).
 - CJK/full-width text, tab stops, horizontal scrolling, and line numbers.
 - Multiple file [tabs](docs/tabs.md) with a tab bar and unsaved-tab protection.
+- Automatic delimiter pairs and rainbow parentheses in Lisp modes.
 - Auto-fill and optional [soft wrapping](docs/configuration.md#soft-wrapping)
   of long lines.
-- Minibuffer completion lists and optional [editor completion](docs/completion.md).
+- Minibuffer completion lists and [editor completion](docs/completion.md), automatic in code files.
 - English [spell checking](docs/spelling.md) for prose modes such as Markdown
   and LaTeX.
 - Per-language [configuration](docs/configuration.md) sections for indentation,
@@ -32,7 +33,8 @@ emacette +42 FILE
 ```
 
 See [Installation](docs/install.md) for prebuilt binaries, `install.sh`, and
-uninstall instructions.
+uninstall instructions. A commented example configuration is in
+[examples/config](examples/config).
 
 ## Usage
 
@@ -72,10 +74,10 @@ See [Git integration](docs/git.md) for the full commit workflow.
 The project and binary are now `emacette`. Existing setups keep working where
 practical:
 
-- The new config path is `~/.config/emacette/config`.
-- If it does not exist, the old `~/.config/nano-emacs/config` is read.
+- The config path is `~/.config/emacette/config`.
+- The old `~/.config/nano-emacs/config` is not read.
 - `EMACETTE_CONFIG` and `EMACETTE_DICT` replace `NANO_EMACS_CONFIG` and
-  `NANO_EMACS_DICT`; the old variables are still accepted as fallbacks.
+  `NANO_EMACS_DICT`; the old environment variables are still accepted.
 - Update `git config --global core.editor` and any scripts that invoked
   `nemacs` to use `emacette`.
 - `cargo uninstall nano-emacs` removes an old cargo-installed binary.
@@ -88,7 +90,7 @@ practical:
 - Editor completion falls back to buffer words without LSP; there is no fuzzy matching.
 - LSP support covers diagnostics and completion only; no hover, rename, or formatting.
 - Spell checking is English-only and needs a word list or hunspell dictionary.
-- No regex search, macros, rectangles, org-mode, or Emacs Lisp.
+- No regex search, macros, rectangles, org-mode, or Emacs Lisp extension language.
 - Not intended for very large files: a 200k-line, 7.6 MB file takes about
   100 ms to first paint.
 

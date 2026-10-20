@@ -69,7 +69,7 @@ pub static HELP: &[HelpLine] = &[
     HelpLine::Key("C-g", "cancel"),
     HelpLine::Blank,
     HelpLine::Heading("Completion, LSP and spelling"),
-    HelpLine::Text("Editor completion: M-x toggle-editor-completion"),
+    HelpLine::Text("Editor completion: automatic in code; M-x toggle-editor-completion"),
     HelpLine::Text("Complete at point: M-x complete-symbol"),
     HelpLine::Text("LSP diagnostics: diagnostics_inline / diagnostics_popup"),
     HelpLine::Text("Go to errors: M-g n / M-g p (M-x next-error / previous-error)"),
@@ -79,6 +79,8 @@ pub static HELP: &[HelpLine] = &[
     HelpLine::Text("Alt (Meta) works as ESC followed by the key."),
     HelpLine::Text("M-x auto-fill-mode / toggle-truncate-lines"),
     HelpLine::Text("M-x kill-region, kill-ring-save, delete-region"),
+    HelpLine::Text("Auto-pairs: (), [], {}, quotes; Backspace deletes an empty pair."),
+    HelpLine::Text("Lisp modes use rainbow parentheses."),
     HelpLine::Text("Configuration: ~/.config/emacette/config"),
     HelpLine::Text("  Global keys plus sections such as [rust] and [markdown]."),
 ];

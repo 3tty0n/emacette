@@ -121,11 +121,13 @@ stage="$tmp/package"
 mkdir -p "$stage"
 cp "$bin" "$stage/emacette"
 cp README.md LICENSE "$stage/"
+mkdir -p "$stage/examples"
+cp examples/config examples/README.md "$stage/examples/"
 chmod 755 "$stage/emacette"
 
 archive="emacette-${tag}-${target}.tar.gz"
 mkdir -p "$output"
-COPYFILE_DISABLE=1 tar -czf "$output/$archive" -C "$stage" emacette README.md LICENSE
+COPYFILE_DISABLE=1 tar -czf "$output/$archive" -C "$stage" emacette README.md LICENSE examples/config
 
 if command -v sha256sum >/dev/null 2>&1; then
     (cd "$output" && sha256sum "$archive" > "$archive.sha256")

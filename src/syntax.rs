@@ -39,6 +39,7 @@ pub enum Lang {
     Ini,
     Hcl,
     Nix,
+    Lisp,
     Cmake,
     Dockerfile,
     Makefile,
@@ -84,6 +85,7 @@ impl Lang {
             Lang::Ini => "INI",
             Lang::Hcl => "HCL",
             Lang::Nix => "Nix",
+            Lang::Lisp => "Lisp",
             Lang::Cmake => "CMake",
             Lang::Dockerfile => "Dockerfile",
             Lang::Makefile => "Makefile",
@@ -130,6 +132,7 @@ impl Lang {
             Lang::Ini => "ini",
             Lang::Hcl => "hcl",
             Lang::Nix => "nix",
+            Lang::Lisp => "lisp",
             Lang::Cmake => "cmake",
             Lang::Dockerfile => "dockerfile",
             Lang::Makefile => "makefile",
@@ -157,6 +160,7 @@ impl Lang {
             Lang::Shell => &["shell", "sh"],
             Lang::GitCommit => &["gitcommit", "git"],
             Lang::Hcl => &["hcl", "terraform"],
+            Lang::Lisp => &["lisp", "elisp", "scheme", "clojure", "racket"],
             Lang::Protobuf => &["protobuf", "proto"],
             _ => &[],
         }
@@ -199,6 +203,7 @@ impl Lang {
             | Lang::Dockerfile
             | Lang::Makefile => "#",
             Lang::Lua | Lang::Haskell | Lang::Sql => "--",
+            Lang::Lisp => ";",
             Lang::Latex => "%",
             Lang::Rst => "..",
             Lang::Ini => ";",
@@ -239,6 +244,7 @@ impl Lang {
             Lang::Ini => "ini",
             Lang::Hcl => "hcl",
             Lang::Nix => "nix",
+            Lang::Lisp => "lisp",
             Lang::Cmake => "cmake",
             Lang::Dockerfile => "dockerfile",
             Lang::Makefile => "makefile",
@@ -249,6 +255,38 @@ impl Lang {
             Lang::Svelte => "svelte",
             Lang::Diff => "diff",
         }
+    }
+
+    /// Programming-language modes where completion at point is useful.
+    pub fn is_code(self) -> bool {
+        matches!(
+            self,
+            Lang::Rust
+                | Lang::Go
+                | Lang::C
+                | Lang::Cpp
+                | Lang::Java
+                | Lang::Kotlin
+                | Lang::Swift
+                | Lang::Zig
+                | Lang::Dart
+                | Lang::Python
+                | Lang::JavaScript
+                | Lang::TypeScript
+                | Lang::Ruby
+                | Lang::Php
+                | Lang::Lua
+                | Lang::Haskell
+                | Lang::Elixir
+                | Lang::Nix
+                | Lang::Lisp
+                | Lang::Sql
+                | Lang::Shell
+        )
+    }
+
+    pub fn is_lisp(self) -> bool {
+        matches!(self, Lang::Lisp)
     }
 
     /// Modes where prose-oriented features such as spell checking make sense.
@@ -316,6 +354,8 @@ impl Lang {
                 "lua" => Lang::Lua,
                 "hs" | "lhs" | "hsc" => Lang::Haskell,
                 "ex" | "exs" | "eex" | "heex" => Lang::Elixir,
+                "lisp" | "lsp" | "cl" | "el" | "scm" | "ss" | "sls" | "sld" | "rkt" | "clj"
+                | "cljs" | "cljc" | "edn" => Lang::Lisp,
                 "sql" | "psql" => Lang::Sql,
                 "sh" | "bash" | "zsh" | "fish" | "ksh" => Lang::Shell,
                 "md" | "markdown" | "mdx" => Lang::Markdown,
@@ -364,6 +404,15 @@ impl Lang {
                 }
                 if cmd.contains("dart") {
                     return Lang::Dart;
+                }
+                if cmd.contains("sbcl")
+                    || cmd.contains("clisp")
+                    || cmd.contains("scheme")
+                    || cmd.contains("racket")
+                    || cmd.contains("guile")
+                    || cmd.contains("clojure")
+                {
+                    return Lang::Lisp;
                 }
                 if cmd.contains("nix-shell") || cmd.contains("nix") {
                     return Lang::Nix;
@@ -466,6 +515,7 @@ pub fn lex(lang: Lang, chars: &[char], state: LexState) -> (Vec<Span>, LexState)
         Lang::Ini => lex_ini(chars, state),
         Lang::Hcl => lex_code(chars, state, &HCL),
         Lang::Nix => lex_code(chars, state, &NIX),
+        Lang::Lisp => lex_code(chars, state, &LISP),
         Lang::Cmake => lex_code(chars, state, &CMAKE),
         Lang::Dockerfile => lex_dockerfile(chars, state),
         Lang::Makefile => lex_makefile(chars, state),
@@ -2438,6 +2488,76 @@ const NIX: CodeSpec = CodeSpec {
     nix: true,
     ..CodeSpec::DEFAULT
 };
+const LISP_KEYWORDS: &[&str] = &[
+    "defun",
+    "defmacro",
+    "defvar",
+    "defparameter",
+    "defconstant",
+    "defclass",
+    "defmethod",
+    "defgeneric",
+    "defpackage",
+    "in-package",
+    "lambda",
+    "let",
+    "let*",
+    "letrec",
+    "if",
+    "cond",
+    "when",
+    "unless",
+    "progn",
+    "prog1",
+    "prog2",
+    "setq",
+    "setf",
+    "quote",
+    "function",
+    "loop",
+    "do",
+    "dolist",
+    "dotimes",
+    "case",
+    "typecase",
+    "handler-case",
+    "unwind-protect",
+    "and",
+    "or",
+    "not",
+    "car",
+    "cdr",
+    "cons",
+    "list",
+    "apply",
+    "funcall",
+    "mapcar",
+    "mapc",
+    "format",
+    "princ",
+    "print",
+    "require",
+    "provide",
+    "eval-when",
+    "declare",
+    "declaim",
+    "fn",
+    "defn",
+    "def",
+    "ns",
+];
+const LISP_CONSTANTS: &[&str] = &["nil", "t", "true", "false"];
+
+const LISP: CodeSpec = CodeSpec {
+    line_comments: &[";"],
+    block_comment: Some(("#|", "|#", true)),
+    quotes: &[DOUBLE],
+    keywords: LISP_KEYWORDS,
+    constants: LISP_CONSTANTS,
+    symbols: true,
+    ..CodeSpec::DEFAULT
+};
+
 const PROTOBUF: CodeSpec = CodeSpec {
     line_comments: &["//"],
     block_comment: Some(("/*", "*/", false)),
@@ -4302,6 +4422,10 @@ mod tests {
             ("a.ini", Lang::Ini),
             ("a.tf", Lang::Hcl),
             ("a.nix", Lang::Nix),
+            ("a.el", Lang::Lisp),
+            ("a.scm", Lang::Lisp),
+            ("a.clj", Lang::Lisp),
+            ("a.rkt", Lang::Lisp),
             ("a.cmake", Lang::Cmake),
             ("a.proto", Lang::Protobuf),
             ("a.vue", Lang::Vue),
@@ -4717,6 +4841,14 @@ mod tests {
             Lang::detect(Some(Path::new("x.unknown")), None),
             Lang::Plain
         );
+    }
+
+    #[test]
+    fn lisp_basics() {
+        let (spans, _) = kinds("(defun f (x) \"; c\") ; tail", Lang::Lisp);
+        assert!(spans.contains(&("defun".into(), Tok::Keyword)));
+        assert!(spans.contains(&("\"; c\"".into(), Tok::String)));
+        assert!(spans.contains(&("; tail".into(), Tok::Comment)));
     }
 
     #[test]

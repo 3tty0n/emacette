@@ -104,6 +104,7 @@ pub struct Theme {
     pub diagnostic_hint: Style,
     pub tab_bar: Style,
     pub tab_active: Style,
+    pub rainbow: [Style; 6],
 }
 
 impl Theme {
@@ -162,6 +163,14 @@ impl Theme {
             diagnostic_hint: Style::fg(244).underline(),
             tab_bar: Style::fg(250).with_bg(236),
             tab_active: Style::fg(231).with_bg(60).bold(),
+            rainbow: [
+                Style::fg(203).bold(),
+                Style::fg(221).bold(),
+                Style::fg(117).bold(),
+                Style::fg(114).bold(),
+                Style::fg(179).bold(),
+                Style::fg(141).bold(),
+            ],
         }
     }
 
@@ -209,6 +218,14 @@ impl Theme {
             diagnostic_hint: Style::fg(240).underline(),
             tab_bar: Style::fg(235).with_bg(253),
             tab_active: Style::fg(16).with_bg(153).bold(),
+            rainbow: [
+                Style::fg(160).bold(),
+                Style::fg(130).bold(),
+                Style::fg(25).bold(),
+                Style::fg(28).bold(),
+                Style::fg(90).bold(),
+                Style::fg(129).bold(),
+            ],
         }
     }
 }

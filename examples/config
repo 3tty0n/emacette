@@ -1,0 +1,92 @@
+# emacette example configuration
+#
+# Copy this file to one of:
+#   $EMACETTE_CONFIG
+#   $XDG_CONFIG_HOME/emacette/config
+#   ~/.config/emacette/config
+#
+# Values outside a section are the defaults for every language.  A section
+# such as [rust] overrides only that language.  Section names ignore case,
+# spaces, hyphens, and underscores.
+
+# ---------------------------------------------------------------------------
+# Global defaults
+# ---------------------------------------------------------------------------
+
+tab_width = 4
+line_numbers = true
+highlight_trailing_whitespace = true
+auto_indent = true
+auto_pairs = true            # insert matching quotes/brackets
+
+# Hard-wrap typed text at fill_column.  Use M-x auto-fill-mode at runtime.
+auto_fill = false
+fill_column = 70
+
+# true keeps one logical line on one screen row (horizontal scrolling).
+# false soft-wraps long lines at the terminal width.
+truncate_lines = true
+
+# Completion at point is enabled automatically in programming-language files
+# (Rust, Python, C, Go, JavaScript, ...).  Uncomment to force it on everywhere,
+# or set false to disable the automatic behaviour.
+# editor_completion = true
+
+# English spell checking in prose modes.
+# M-x flyspell-mode also toggles this.
+spell_check = false
+# spell_dictionary = ~/.local/share/hunspell/en_US.dic
+
+# LSP diagnostics.
+diagnostics_inline = true
+diagnostics_popup = true
+
+# Git commit message prefix.  Per-language comment_start takes precedence.
+# comment_char = "#"
+
+theme = dark                 # dark or light
+confirm_on_quit = true
+
+# ---------------------------------------------------------------------------
+# Language-specific examples
+# ---------------------------------------------------------------------------
+
+[rust]
+comment_start = //
+# lsp_command = rust-analyzer
+
+[python]
+comment_start = "#"
+# lsp_command = pyright-langserver --stdio
+# lsp_language_id = python
+
+[c]
+comment_start = //
+# lsp_command = clangd
+
+[cpp]
+comment_start = //
+# lsp_command = clangd
+
+[go]
+comment_start = //
+# lsp_command = gopls
+
+[typescript]
+comment_start = //
+# lsp_command = typescript-language-server --stdio
+
+[markdown]
+# spell_check = true
+# lsp_command = marksman server
+# diagnostics_popup = false
+
+[latex]
+comment_start = %
+# spell_check = true
+
+[lisp]
+comment_start = ;
+
+[gitcommit]
+comment_start = "#"

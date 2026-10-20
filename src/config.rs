@@ -2,9 +2,10 @@
 //!
 //! A simple `key = value` file is read from
 //! `$EMACETTE_CONFIG`, `$XDG_CONFIG_HOME/emacette/config`, or
-//! `~/.config/emacette/config`. The legacy `NANO_EMACS_CONFIG` and
-//! `~/.config/nano-emacs/config` are read as fallbacks. Unknown keys are
-//! ignored, so the file can grow without breaking older builds.
+//! `~/.config/emacette/config`. The legacy `$NANO_EMACS_CONFIG` environment
+//! variable is still accepted, but `~/.config/nano-emacs/config` is not read.
+//! Unknown keys are ignored, so the file can grow without breaking older
+//! builds.
 //!
 //! Values outside a section are the defaults for every language. A section
 //! such as `[rust]` overrides only that language.
@@ -28,6 +29,7 @@ pub struct LanguageConfig {
     pub fill_column: Option<usize>,
     pub truncate_lines: Option<bool>,
     pub editor_completion: Option<bool>,
+    pub auto_pairs: Option<bool>,
     pub spell_check: Option<bool>,
     pub spell_dictionary: Option<String>,
     pub comment_start: Option<String>,
@@ -48,6 +50,7 @@ pub struct Settings {
     pub fill_column: usize,
     pub truncate_lines: bool,
     pub editor_completion: bool,
+    pub auto_pairs: bool,
     pub spell_check: bool,
     pub spell_dictionary: Option<String>,
     pub comment_start: String,
@@ -70,7 +73,13 @@ pub struct Config {
     /// Truncate long lines and scroll horizontally instead of wrapping them.
     pub truncate_lines: bool,
     /// Show word-completion candidates while typing in the editor.
+    /// Unless explicitly configured, programming-language modes enable this
+    /// automatically.
     pub editor_completion: bool,
+    /// True when `editor_completion` came from the config file.
+    pub editor_completion_explicit: bool,
+    /// Insert matching delimiters and skip/delete pairs while typing.
+    pub auto_pairs: bool,
     /// Highlight misspelled words in prose modes.
     pub spell_check: bool,
     /// Optional path to a word list or hunspell `.dic` file.
@@ -103,6 +112,8 @@ impl Default for Config {
             fill_column: 70,
             truncate_lines: true,
             editor_completion: false,
+            editor_completion_explicit: false,
+            auto_pairs: true,
             spell_check: false,
             spell_dictionary: None,
             comment_start: None,
@@ -171,6 +182,17 @@ impl Config {
         let pick_usize = |get: fn(&LanguageConfig) -> Option<usize>, default: usize| {
             overrides.and_then(get).unwrap_or(default)
         };
+        let editor_completion = overrides
+            .and_then(|config| config.editor_completion)
+            .unwrap_or_else(|| {
+                if self.editor_completion {
+                    true
+                } else if self.editor_completion_explicit {
+                    false
+                } else {
+                    lang.is_code()
+                }
+            });
         let comment_start = overrides
             .and_then(|config| config.comment_start.clone())
             .or_else(|| self.comment_start.clone())
@@ -189,7 +211,8 @@ impl Config {
             auto_fill: pick_bool(|config| config.auto_fill, self.auto_fill),
             fill_column: pick_usize(|config| config.fill_column, self.fill_column),
             truncate_lines: pick_bool(|config| config.truncate_lines, self.truncate_lines),
-            editor_completion: pick_bool(|config| config.editor_completion, self.editor_completion),
+            editor_completion,
+            auto_pairs: pick_bool(|config| config.auto_pairs, self.auto_pairs),
             spell_check: pick_bool(|config| config.spell_check, self.spell_check),
             spell_dictionary: overrides
                 .and_then(|config| config.spell_dictionary.clone())
@@ -262,6 +285,12 @@ fn apply_global_key(config: &mut Config, key: &str, value: &str) {
         "editor_completion" | "editor-completion" | "completion_in_editor" => {
             if let Some(b) = parse_bool(value) {
                 config.editor_completion = b;
+                config.editor_completion_explicit = true;
+            }
+        }
+        "auto_pairs" | "auto-pairs" | "electric_pairs" | "electric-pairs" => {
+            if let Some(b) = parse_bool(value) {
+                config.auto_pairs = b;
             }
         }
         "spell_check" | "spell-check" | "spellcheck" => {
@@ -350,6 +379,11 @@ fn apply_language_key(config: &mut LanguageConfig, key: &str, value: &str) {
         "editor_completion" | "editor-completion" | "completion_in_editor" => {
             if let Some(b) = parse_bool(value) {
                 config.editor_completion = Some(b);
+            }
+        }
+        "auto_pairs" | "auto-pairs" | "electric_pairs" | "electric-pairs" => {
+            if let Some(b) = parse_bool(value) {
+                config.auto_pairs = Some(b);
             }
         }
         "spell_check" | "spell-check" | "spellcheck" => {
@@ -456,52 +490,119 @@ fn normalize_section(name: &str) -> String {
 }
 
 fn config_path() -> Option<PathBuf> {
-    if let Ok(path) = env::var("EMACETTE_CONFIG") {
-        if !path.is_empty() {
-            return Some(PathBuf::from(path));
-        }
+    let explicit = env::var("EMACETTE_CONFIG").ok();
+    let legacy = env::var("NANO_EMACS_CONFIG").ok();
+    let xdg = env::var("XDG_CONFIG_HOME").ok();
+    let home = env::var("HOME").ok();
+    config_path_from(
+        explicit.as_deref().filter(|path| !path.is_empty()),
+        legacy.as_deref().filter(|path| !path.is_empty()),
+        xdg.as_deref().filter(|path| !path.is_empty()),
+        home.as_deref(),
+    )
+}
+
+fn config_path_from(
+    explicit: Option<&str>,
+    legacy_env: Option<&str>,
+    xdg: Option<&str>,
+    home: Option<&str>,
+) -> Option<PathBuf> {
+    if let Some(path) = explicit {
+        return Some(PathBuf::from(path));
     }
-    let (new_path, legacy_path) = match env::var("XDG_CONFIG_HOME")
-        .ok()
-        .filter(|dir| !dir.is_empty())
-    {
-        Some(dir) => (
-            PathBuf::from(&dir).join("emacette").join("config"),
-            PathBuf::from(dir).join("nano-emacs").join("config"),
-        ),
+    let new_path = match xdg {
+        Some(dir) => PathBuf::from(dir).join("emacette").join("config"),
         None => {
-            let home = env::var("HOME").ok()?;
-            (
-                PathBuf::from(&home)
-                    .join(".config")
-                    .join("emacette")
-                    .join("config"),
-                PathBuf::from(home)
-                    .join(".config")
-                    .join("nano-emacs")
-                    .join("config"),
-            )
+            let home = home?;
+            PathBuf::from(home)
+                .join(".config")
+                .join("emacette")
+                .join("config")
         }
     };
     if new_path.is_file() {
         return Some(new_path);
     }
-    // Migration fallback: the old environment variable is still honored.
-    if let Ok(path) = env::var("NANO_EMACS_CONFIG") {
-        if !path.is_empty() {
-            return Some(PathBuf::from(path));
-        }
+    // Explicit migration override only; ~/.config/nano-emacs/config is not read.
+    if let Some(path) = legacy_env {
+        return Some(PathBuf::from(path));
     }
-    if legacy_path.is_file() {
-        Some(legacy_path)
-    } else {
-        Some(new_path)
-    }
+    Some(new_path)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn completion_defaults_to_code_languages() {
+        let config = Config::default();
+        for lang in [
+            Lang::Rust,
+            Lang::Python,
+            Lang::JavaScript,
+            Lang::Shell,
+            Lang::Sql,
+            Lang::Nix,
+        ] {
+            assert!(
+                config.settings_for(lang).editor_completion,
+                "{} should auto-enable completion",
+                lang.name()
+            );
+        }
+        for lang in [
+            Lang::Plain,
+            Lang::Markdown,
+            Lang::Latex,
+            Lang::Json,
+            Lang::GitCommit,
+        ] {
+            assert!(
+                !config.settings_for(lang).editor_completion,
+                "{} should not auto-enable completion",
+                lang.name()
+            );
+        }
+    }
+
+    #[test]
+    fn explicit_completion_setting_overrides_code_default() {
+        let mut config = Config::default();
+        config.parse("editor_completion = false");
+        assert!(config.editor_completion_explicit);
+        assert!(!config.settings_for(Lang::Rust).editor_completion);
+
+        let mut config = Config::default();
+        config.parse("editor_completion = true");
+        assert!(config.settings_for(Lang::Markdown).editor_completion);
+
+        let mut config = Config::default();
+        config.parse("[rust]\neditor_completion = false\n");
+        assert!(!config.settings_for(Lang::Rust).editor_completion);
+        assert!(config.settings_for(Lang::Python).editor_completion);
+    }
+
+    #[test]
+    fn example_config_parses() {
+        let mut config = Config::default();
+        config.parse(include_str!("../examples/config"));
+        assert_eq!(config.tab_width, 4);
+        assert!(config.line_numbers);
+        assert!(!config.auto_fill);
+        assert!(config.diagnostics_inline);
+        assert!(config.diagnostics_popup);
+        assert!(config.settings_for(Lang::Rust).editor_completion);
+        assert!(config.settings_for(Lang::Lisp).editor_completion);
+        assert!(!config.settings_for(Lang::Markdown).editor_completion);
+        assert!(config.settings_for(Lang::Lisp).auto_pairs);
+        assert_eq!(config.theme, ThemeName::Dark);
+        assert_eq!(config.settings_for(Lang::Rust).comment_start, "//");
+        assert_eq!(config.settings_for(Lang::Python).comment_start, "#");
+        assert_eq!(config.settings_for(Lang::Latex).comment_start, "%");
+        assert_eq!(config.settings_for(Lang::GitCommit).comment_start, "#");
+    }
 
     #[test]
     fn parses_known_keys_and_ignores_junk() {
@@ -592,6 +693,39 @@ mod tests {
             settings.lsp_command.as_deref(),
             Some("python3 \"/tmp/a b/server.py\" --stdio")
         );
+    }
+
+    #[test]
+    fn legacy_default_config_path_is_not_read() {
+        let dir = std::env::temp_dir().join(format!("emacette-config-path-{}", std::process::id()));
+        let legacy_dir = dir.join(".config").join("nano-emacs");
+        std::fs::create_dir_all(&legacy_dir).unwrap();
+        std::fs::write(legacy_dir.join("config"), "tab_width = 8\n").unwrap();
+
+        let path = config_path_from(None, None, None, Some(dir.to_str().unwrap())).unwrap();
+        assert_eq!(path, dir.join(".config").join("emacette").join("config"));
+        assert_ne!(path, legacy_dir.join("config"));
+
+        let explicit = dir.join("explicit-config");
+        std::fs::write(&explicit, "tab_width = 2\n").unwrap();
+        assert_eq!(
+            config_path_from(Some(explicit.to_str().unwrap()), None, None, None),
+            Some(explicit)
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn auto_pairs_can_be_configured_per_language() {
+        let mut config = Config::default();
+        assert!(config.settings_for(Lang::Rust).auto_pairs);
+        config.parse("auto_pairs = false");
+        assert!(!config.settings_for(Lang::Rust).auto_pairs);
+
+        let mut config = Config::default();
+        config.parse("[lisp]\nauto_pairs = false\n");
+        assert!(!config.settings_for(Lang::Lisp).auto_pairs);
+        assert!(config.settings_for(Lang::Rust).auto_pairs);
     }
 
     #[test]

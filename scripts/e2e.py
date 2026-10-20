@@ -313,6 +313,27 @@ while True:
     shutil.rmtree(directory, ignore_errors=True)
 
 
+def test_code_completion_is_automatic():
+    directory = tempfile.mkdtemp(prefix="nano-emacs-e2e-")
+    path = os.path.join(directory, "main.rs")
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write("alpha alphabet\n")
+    code, out, _ = run(
+        [BIN, path],
+        [b"\x01", b"al", b"\x07", b"\x18\x03", b"n"],
+        cols=COLS,
+        rows=ROWS,
+        expect=b"emacette",
+        key_delay=0.1,
+    )
+    check(
+        "code files enable completion without configuration",
+        code == 0 and b"> alalpha" in out,
+        repr(out[-400:]),
+    )
+    shutil.rmtree(directory, ignore_errors=True)
+
+
 def test_editor_completion_menu():
     directory = tempfile.mkdtemp(prefix="emacette-e2e-")
     config = os.path.join(directory, "config")
@@ -654,6 +675,7 @@ def main():
     test_find_file_tab_completion()
     test_minibuffer_menus_open_immediately()
     test_minibuffer_completion_ctrl_n()
+    test_code_completion_is_automatic()
     test_lsp_diagnostics_and_completion()
     test_editor_completion_menu()
     test_spell_check()

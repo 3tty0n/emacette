@@ -2,7 +2,7 @@
 
 Part of [emacette](../README.md).
 
-Syntax highlighting covers 39 languages and formats.
+Syntax highlighting covers 40 languages and formats.
 
 ## Systems
 
@@ -28,6 +28,18 @@ Syntax highlighting covers 39 languages and formats.
 - Elixir
 - Haskell
 - SQL
+
+## Lisp family
+
+- Common Lisp
+- Emacs Lisp
+- Scheme
+- Clojure
+- Racket
+
+All use the `Lisp` mode. Parentheses are coloured by nesting depth in this
+mode. When using an LSP server for Clojure, Scheme, or Racket, set
+`lsp_language_id` to the appropriate identifier in the `[lisp]` section.
 
 ## Markup and prose
 
@@ -67,6 +79,10 @@ Syntax highlighting covers 39 languages and formats.
   PHP, Lua, Elixir, Haskell, Dart, Nix, and common shells.
 - `COMMIT_EDITMSG`, `MERGE_MSG`, `TAG_EDITMSG`, and `SQUASH_MSG` open in
   Git commit mode.
+- `.lisp`, `.lsp`, `.cl`, `.asd`, `.el`, `.scm`, `.ss`, `.rkt`, `.clj`,
+  `.cljs`, `.cljc`, and `.edn` open in Lisp mode.
+- Lisp shebangs for `sbcl`, `clisp`, `scheme`, `racket`, `guile`, and
+  `clojure` are detected.
 
 ## Notes
 
@@ -83,5 +99,7 @@ Each language can have its own configuration section, for example `[rust]`,
 underscores.
 
 Overridable keys include indentation, comment prefixes, completion, spelling,
-diagnostics, and the LSP command. See
+diagnostics, and the LSP command. Programming-language modes enable editor
+completion automatically; set `editor_completion = false` in a section to
+disable it there. See
 [Configuration](configuration.md#per-language-options) and [LSP](lsp.md).

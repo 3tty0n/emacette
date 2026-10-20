@@ -51,7 +51,7 @@ Releases are built and published manually.
 ```
 
 - The script writes `dist/emacette-v<version>-<target>.tar.gz` and a `.sha256`
-  file.
+  file. Archives contain the binary, README, LICENSE, and `examples/config`.
 - The script does not tag or upload.
 - `make release ARGS="--target x86_64-unknown-linux-musl"` is equivalent to the
   script.

@@ -20,6 +20,7 @@ make install PREFIX=/usr/local
 - `cargo uninstall emacette` removes a cargo-installed binary.
 - `make uninstall` removes a binary installed with `make install`.
 - `~/.local/bin` must be on `PATH` when installing with `make` or `install.sh`.
+- An annotated example configuration is in `examples/config`.
 
 ## Prebuilt binaries
 
@@ -47,8 +48,7 @@ From a checkout, or to pin a release:
 - Set `EMACETTE_REPO=owner/repo` when the repository slug differs.
 - `NEMACS_REPO` and `NEMACS_BASE_URL` are accepted as legacy aliases.
 - Re-run the installer, or run `cargo install --force`, to update.
-- `--uninstall` never removes `~/.config/emacette` or the legacy
-  `~/.config/nano-emacs`.
+- `--uninstall` never removes `~/.config/emacette`.
 
 The URLs above assume the repository is `3tty0n/emacette`.
 

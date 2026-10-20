@@ -60,6 +60,15 @@ impl Highlighter {
         }
     }
 
+    /// Lexical state at the beginning of `row`.
+    pub fn state_at(&mut self, row: usize, lines: &[Line]) -> LexState {
+        if row == 0 {
+            return LexState::default();
+        }
+        self.ensure(row - 1, lines);
+        self.states.get(row).copied().unwrap_or_default()
+    }
+
     pub fn tokens(&mut self, row: usize, lines: &[Line]) -> &[Span] {
         self.ensure(row, lines);
         self.tokens

@@ -252,6 +252,7 @@ fn build_truncated_text_rows(editor: &mut Editor, body_rows: usize) -> Vec<Strin
             let lines = &editor.buffer.lines;
             editor.highlighter.tokens(row, lines).to_vec()
         };
+        let rainbow = editor.rainbow_row(row);
         let spell = editor.spell_spans(row);
         let diagnostics = editor.diagnostic_ranges(row);
         let chars = &editor.buffer.lines[row];
@@ -289,6 +290,7 @@ fn build_truncated_text_rows(editor: &mut Editor, body_rows: usize) -> Vec<Strin
             search,
             highlight_trailing,
             &spell,
+            rainbow.as_deref(),
             &diagnostics,
             0,
             chars.len(),
@@ -327,6 +329,7 @@ fn build_wrapped_text_rows(editor: &mut Editor, body_rows: usize) -> Vec<String>
             let lines = &editor.buffer.lines;
             editor.highlighter.tokens(row, lines).to_vec()
         };
+        let rainbow = editor.rainbow_row(row);
         let spell = editor.spell_spans(row);
         let diagnostics = editor.diagnostic_ranges(row);
         let chars = &editor.buffer.lines[row];
@@ -383,6 +386,7 @@ fn build_wrapped_text_rows(editor: &mut Editor, body_rows: usize) -> Vec<String>
             search,
             highlight_trailing,
             &spell,
+            rainbow.as_deref(),
             &diagnostics,
             start_idx,
             end_idx,
@@ -417,6 +421,7 @@ fn draw_line(
     search: Option<(usize, usize)>,
     highlight_trailing: bool,
     spell: &[(usize, usize)],
+    rainbow: Option<&[u8]>,
     diagnostics: &[(usize, usize, Severity)],
     start_idx: usize,
     end_idx: usize,
@@ -469,6 +474,18 @@ fn draw_line(
             Some(span) if span.start <= idx => theme.tok(span.kind),
             _ => theme.text,
         };
+
+        if let Some(depths) = rainbow {
+            if let Some(&depth) = depths.get(idx) {
+                if matches!(chars[idx], '(' | ')' | '[' | ']' | '{' | '}') {
+                    let rainbow_style = theme.rainbow[depth as usize % theme.rainbow.len()];
+                    if let Some(fg) = rainbow_style.fg {
+                        style.fg = Some(fg);
+                    }
+                    style.bold |= rainbow_style.bold;
+                }
+            }
+        }
 
         while spell_idx < spell.len() && spell[spell_idx].1 <= idx {
             spell_idx += 1;
@@ -1073,6 +1090,18 @@ mod tests {
         assert!(plain.contains("sample.rs"));
         assert!(plain.contains("Rust"));
         assert!(frame.cursor.is_some());
+    }
+
+    #[test]
+    fn lisp_rainbow_parentheses_use_distinct_colors() {
+        let mut ed = Editor::from_text(
+            "(a (b))\n",
+            Some(std::path::PathBuf::from("init.el")),
+            Config::default(),
+        );
+        let frame = render(&mut ed, 40, 8);
+        assert!(frame.output.contains("38;5;203"));
+        assert!(frame.output.contains("38;5;221"));
     }
 
     #[test]

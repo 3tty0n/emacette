@@ -42,16 +42,22 @@ above the mode line. The list updates while you type.
 
 ## Editor completion
 
-Editor completion is optional and off by default.
+Editor completion is enabled automatically in programming-language files and
+off in prose, markup, and data formats.
 
-- Set `editor_completion = true` in the configuration, or run
-  `M-x toggle-editor-completion`.
+- Rust, Go, C/C++, Java, Kotlin, Swift, Zig, Dart, Python, JavaScript,
+  TypeScript, Ruby, PHP, Lua, Haskell, Elixir, Nix, Lisp, SQL, and Shell
+  enable it by default.
+- Set `editor_completion = false` in the global configuration to disable the
+  automatic behavior, or in a language section to disable it for that
+  language only. Set it to `true` to enable completion everywhere.
+- `M-x toggle-editor-completion` toggles the current tab at runtime.
 - After two word characters, a candidate menu appears automatically.
 - `M-x complete-symbol` opens the menu manually at any prefix length.
 - Candidates come from words and `\commands` in the current buffer.
 - If an LSP server is configured for the language, `M-x complete-symbol`
   requests server completions as well. See [LSP](lsp.md).
-- LSP requests are also sent while typing when `editor_completion = true`.
+- LSP requests are also sent while typing when completion is active (automatic in code files, or enabled explicitly).
 - Buffer-word candidates appear immediately; LSP results replace the menu when
   they arrive.
 - A manual LSP request works with an empty prefix, so member completion after
@@ -73,9 +79,10 @@ The mode line shows `Comp` while editor completion is enabled.
 
 ## Configuration
 
-- `editor_completion` — enable automatic editor completion; default `false`.
-  Set it in the configuration file or toggle it with
-  `M-x toggle-editor-completion`. The value can be overridden per language.
+- `editor_completion` — control automatic editor completion. When unset, it
+  is enabled in programming-language files and off elsewhere. Set `true` to
+  enable everywhere or `false` to disable it. The value can be overridden per
+  language, and `M-x toggle-editor-completion` toggles the current tab.
 - `lsp_command` — optional language-server command for LSP completion; see
   [LSP](lsp.md).
 

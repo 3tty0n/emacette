@@ -67,7 +67,9 @@ diagnostics_popup = false
 
 - With a server configured, `M-x complete-symbol` (`completion-at-point`)
   asks the server for completions at point.
-- If `editor_completion = true`, requests are also sent while typing.
+- Requests are also sent while typing when completion is active (automatic in
+  programming-language files, or enabled explicitly with
+  `editor_completion`).
 - Buffer-word candidates appear immediately; LSP results replace the menu when
   they arrive.
 - A manual request works with an empty prefix, so member completion after `.`

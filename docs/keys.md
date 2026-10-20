@@ -51,6 +51,9 @@ Part of [emacette](../README.md).
 - `C-/` or `C-_` — undo; `M-x redo` redoes.
 - `TAB` / `S-TAB` — indent / unindent.
 - `M-;` — comment or uncomment the current line or region.
+- Opening `(`, `[`, `{`, `"`, `'`, and `` ` `` inserts the matching closing
+  delimiter when auto-pairs is enabled. A single quote is not paired in Lisp
+  quote syntax or prose modes. `Backspace` removes an empty pair.
 - `M-$` — prompt to replace the misspelled word at point.
 
 ### Region behaviour

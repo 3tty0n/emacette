@@ -10,11 +10,12 @@ The first existing file is used:
 - `$XDG_CONFIG_HOME/emacette/config`
 - `~/.config/emacette/config`
 
-For migration, these are used only when the new path does not exist:
+`$NANO_EMACS_CONFIG` is still accepted as an explicit legacy override.
+`~/.config/nano-emacs/config` is not read.
 
-- `$NANO_EMACS_CONFIG`
-- `$XDG_CONFIG_HOME/nano-emacs/config`
-- `~/.config/nano-emacs/config`
+An annotated example is available at
+[examples/config](../examples/config). Copy it to one of the paths above and
+uncomment the settings you need.
 
 ## Format
 
@@ -37,7 +38,7 @@ auto_indent = true
 auto_fill = false
 fill_column = 70
 truncate_lines = true        # false = soft-wrap long lines
-editor_completion = false
+# editor_completion = true      # default: automatic in code files
 spell_check = false
 # spell_dictionary = ~/.config/emacette/en.dic
 diagnostics_inline = true
@@ -68,13 +69,18 @@ diagnostics_popup = false
 - `highlight_trailing_whitespace` (`highlight-trailing-whitespace`) — highlight
   trailing spaces and tabs; default `true`.
 - `auto_indent` (`auto-indent`) — copy the current indentation on `RET`; default `true`.
+- `auto_pairs` (`auto-pairs`, `electric_pairs`) — insert the matching
+  delimiter for `(`, `[`, `{`, `"`, `'`, and `` ` ``; skip over an existing
+  closing delimiter and delete an empty pair with `Backspace`; default `true`.
 - `auto_fill` (`auto-fill`, `auto_fill_mode`, `auto-fill-mode`) — enable
   automatic hard wrapping; default `false`.
 - `fill_column` (`fill-column`) — auto-fill column; default `70`; range `1`–`1000`.
 - `truncate_lines` (`truncate-lines`, `truncate`) — truncate long lines and
   scroll horizontally; set to `false` for soft wrapping; default `true`.
 - `editor_completion` (`editor-completion`, `completion_in_editor`) — show
-  completion candidates while typing; default `false`. See
+  completion candidates while typing. When unset, it is enabled automatically
+  in programming-language files and disabled elsewhere. Set `true` to enable
+  everywhere or `false` to disable the automatic default. See
   [Completion](completion.md).
 - `spell_check` (`spell-check`, `spellcheck`) — highlight misspelled words in
   prose modes; default `false`. See [Spelling](spelling.md).
@@ -106,6 +112,7 @@ These keys are valid in any language section and override the global value:
 - `line_numbers`
 - `highlight_trailing_whitespace`
 - `auto_indent`
+- `auto_pairs`
 - `auto_fill`
 - `fill_column`
 - `truncate_lines`
@@ -126,6 +133,11 @@ Language keys are the names used by the syntax highlighter, for example:
 - `json`, `toml`, `yaml`, `ini`, `hcl`, `nix`, `cmake`, `dockerfile`
 - `makefile`, `protobuf`, `html`, `css`, `vue`, `svelte`, `diff`, `gitcommit`
 
+Automatic completion applies to Rust, Go, C, C++, Java, Kotlin, Swift, Zig,
+Dart, Python, JavaScript, TypeScript, Ruby, PHP, Lua, Haskell, Elixir, Nix,
+SQL, Lisp, and Shell files. It remains off in prose, markup, and data/configuration
+formats such as Markdown, LaTeX, JSON, TOML, and YAML.
+
 See [Languages](languages.md) for detection rules.
 
 ## LSP and diagnostics
@@ -139,6 +151,17 @@ See [Languages](languages.md) for detection rules.
 - Set `lsp_command = off` in a section to disable an inherited command.
 
 See [LSP](lsp.md) for server examples and limitations.
+
+## Delimiters
+
+- `auto_pairs = true` inserts matching `()`, `[]`, `{}`, quotes, and backticks.
+  A single quote is not paired in Lisp (quote syntax) or prose modes.
+- Typing a closing delimiter at the matching character skips over it.
+- `Backspace` removes an empty pair.
+- In Lisp-family modes, parentheses are coloured by nesting depth so matching
+  pairs and nested forms are easy to follow.
+- Disable pairs globally with `auto_pairs = false`, or per language in a
+  section such as `[lisp]`.
 
 ## Comments
 
