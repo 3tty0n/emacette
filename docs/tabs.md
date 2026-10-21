@@ -34,7 +34,8 @@ when two or more tabs are open.
 
 ## State
 
-Each tab keeps its own:
+The kill ring is shared by all tabs: text killed or copied in one tab can be
+yanked in another. Each tab keeps its own:
 
 - buffer text, point, mark, undo/redo history, and line ending
 - scroll position

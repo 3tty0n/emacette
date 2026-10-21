@@ -14,4 +14,5 @@ pub mod search;
 pub mod spell;
 pub mod syntax;
 pub mod theme;
+pub mod tmux;
 pub mod view;

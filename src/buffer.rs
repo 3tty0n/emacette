@@ -1,4 +1,4 @@
-//! The text buffer: lines, point/mark, undo/redo and the kill ring.
+//! The text buffer: lines, point/mark, undo/redo and kill-ring operations.
 //!
 //! Lines are stored as `Vec<char>` so that column arithmetic is
 //! straightforward for multi-byte text (Japanese, emoji, ...).
@@ -123,7 +123,6 @@ pub struct Buffer {
     pub path: Option<PathBuf>,
     pub modified: bool,
     pub line_ending: LineEnding,
-    pub kill_ring: KillRing,
     /// Bumped on every change; used to invalidate syntax highlighting.
     pub version: u64,
     /// Lowest row touched since the last `dirty_from` read. `usize::MAX` = clean.
@@ -194,7 +193,6 @@ impl Buffer {
             } else {
                 LineEnding::Lf
             },
-            kill_ring: KillRing::default(),
             version: 1,
             dirty_from: 0,
             goal_col: None,
@@ -850,22 +848,22 @@ impl Buffer {
         self.move_buffer_end();
     }
 
-    pub fn kill_region(&mut self) -> String {
+    pub fn kill_region(&mut self, kill_ring: &mut KillRing) -> String {
         let Some((start, end)) = self.region() else {
             return String::new();
         };
         let removed = self.delete_range(start, end);
-        self.kill_ring.push(&removed);
+        kill_ring.push(&removed);
         self.mark = None;
         removed
     }
 
-    pub fn copy_region(&mut self) -> String {
+    pub fn copy_region(&mut self, kill_ring: &mut KillRing) -> String {
         let Some((start, end)) = self.region() else {
             return String::new();
         };
         let text = self.text_between(start, end);
-        self.kill_ring.push(&text);
+        kill_ring.push(&text);
         text
     }
 
@@ -879,7 +877,7 @@ impl Buffer {
         removed
     }
 
-    pub fn kill_line(&mut self) -> String {
+    pub fn kill_line(&mut self, kill_ring: &mut KillRing) -> String {
         let row = self.point.row;
         let col = self.point.col;
         if col < self.lines[row].len() {
@@ -887,7 +885,7 @@ impl Buffer {
             let removed: String = old[col..].iter().copied().collect();
             self.lines[row].truncate(col);
             self.record(row, vec![old], 1);
-            self.kill_ring.push(&removed);
+            kill_ring.push(&removed);
             self.goal_col = None;
             removed
         } else if row + 1 < self.lines.len() {
@@ -896,7 +894,7 @@ impl Buffer {
             self.lines[row].extend(next);
             self.lines.remove(row + 1);
             self.record(row, old, 1);
-            self.kill_ring.push("\n");
+            kill_ring.push("\n");
             self.goal_col = None;
             "\n".to_string()
         } else {
@@ -904,22 +902,22 @@ impl Buffer {
         }
     }
 
-    pub fn kill_word_forward(&mut self) -> String {
+    pub fn kill_word_forward(&mut self, kill_ring: &mut KillRing) -> String {
         let end = self.word_forward_point();
         let removed = self.delete_range(self.point, end);
-        self.kill_ring.push(&removed);
+        kill_ring.push(&removed);
         removed
     }
 
-    pub fn kill_word_backward(&mut self) -> String {
+    pub fn kill_word_backward(&mut self, kill_ring: &mut KillRing) -> String {
         let start = self.word_backward_point();
         let removed = self.delete_range(start, self.point);
-        self.kill_ring.push(&removed);
+        kill_ring.push(&removed);
         removed
     }
 
-    pub fn yank(&mut self) -> bool {
-        let Some(text) = self.kill_ring.current().map(str::to_string) else {
+    pub fn yank(&mut self, kill_ring: &mut KillRing) -> bool {
+        let Some(text) = kill_ring.current().map(str::to_string) else {
             return false;
         };
         let start = self.point;
@@ -928,15 +926,15 @@ impl Buffer {
         true
     }
 
-    pub fn yank_pop(&mut self) -> bool {
+    pub fn yank_pop(&mut self, kill_ring: &mut KillRing) -> bool {
         let Some((start, end)) = self.last_yank else {
             return false;
         };
-        if self.kill_ring.len() < 2 {
+        if kill_ring.len() < 2 {
             return false;
         }
-        self.kill_ring.rotate();
-        let Some(text) = self.kill_ring.current().map(str::to_string) else {
+        kill_ring.rotate();
+        let Some(text) = kill_ring.current().map(str::to_string) else {
             return false;
         };
         self.replace_range(start, end, &text);
@@ -1142,11 +1140,12 @@ mod tests {
     #[test]
     fn kill_and_yank() {
         let mut buf = buffer("hello world");
+        let mut kill_ring = KillRing::default();
         buf.point = Point::new(0, 5);
-        buf.kill_line();
+        buf.kill_line(&mut kill_ring);
         assert_eq!(buf.text(), "hello");
         buf.point = Point::new(0, 0);
-        assert!(buf.yank());
+        assert!(buf.yank(&mut kill_ring));
         assert_eq!(buf.text(), " worldhello");
     }
 
@@ -1174,22 +1173,24 @@ mod tests {
     #[test]
     fn region_kill_and_copy() {
         let mut buf = buffer("abcdef");
+        let mut kill_ring = KillRing::default();
         buf.point = Point::new(0, 1);
         buf.set_mark();
         buf.point = Point::new(0, 4);
-        assert_eq!(buf.copy_region(), "bcd");
-        assert_eq!(buf.kill_region(), "bcd");
+        assert_eq!(buf.copy_region(&mut kill_ring), "bcd");
+        assert_eq!(buf.kill_region(&mut kill_ring), "bcd");
         assert_eq!(buf.text(), "aef");
     }
 
     #[test]
     fn yank_pop_cycles_kill_ring() {
         let mut buf = buffer("");
-        buf.kill_ring.push("one");
-        buf.kill_ring.push("two");
-        assert!(buf.yank());
+        let mut kill_ring = KillRing::default();
+        kill_ring.push("one");
+        kill_ring.push("two");
+        assert!(buf.yank(&mut kill_ring));
         assert_eq!(buf.text(), "two");
-        assert!(buf.yank_pop());
+        assert!(buf.yank_pop(&mut kill_ring));
         assert_eq!(buf.text(), "one");
     }
 
@@ -1233,6 +1234,7 @@ mod tests {
         // line splits and joins.
         let original = "alpha\nbeta\ngamma\n";
         let mut buf = Buffer::from_text(original, None);
+        let mut kill_ring = KillRing::default();
         let mut seed: u64 = 0x2545_F491_4F6C_DD1D;
         let mut next = || {
             seed = seed
@@ -1252,7 +1254,7 @@ mod tests {
                     buf.delete_forward();
                 }
                 5 => {
-                    buf.kill_line();
+                    buf.kill_line(&mut kill_ring);
                 }
                 6 => buf.insert_text("x\ny"),
                 _ => {

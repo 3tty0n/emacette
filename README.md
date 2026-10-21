@@ -59,6 +59,7 @@ See [Git integration](docs/git.md) for the full commit workflow.
 
 - [Key bindings](docs/keys.md) — full key list, regions, search, and minibuffer editing.
 - [Tabs](docs/tabs.md) — multiple files, switching, and closing tabs.
+- [tmux](docs/tmux.md) — editor key priority inside tmux panes.
 - [Commands](docs/commands.md) — `M-x` commands for files, regions, display, and spelling.
 - [Completion](docs/completion.md) — minibuffer lists and optional editor completion.
 - [Spelling](docs/spelling.md) — English dictionaries, highlighting, and corrections.

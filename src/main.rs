@@ -16,6 +16,7 @@ use emacette::editor::Editor;
 use emacette::help;
 use emacette::key::{Key, KeyCode};
 use emacette::render;
+use emacette::tmux;
 
 fn main() -> ExitCode {
     match run() {
@@ -79,6 +80,9 @@ fn run() -> Result<i32, String> {
     }
 
     let _terminal = TerminalGuard::enter().map_err(|e| format!("terminal setup failed: {e}"))?;
+    // tmux handles its own key tables before input reaches the pane.  Keep
+    // emacette's bindings usable there, and restore tmux's bindings on exit.
+    let _tmux_keys = tmux::KeyGuard::install();
     let mut stdout = io::stdout();
     let mut renderer = render::Renderer::new();
 

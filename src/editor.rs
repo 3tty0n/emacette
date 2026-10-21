@@ -5,7 +5,7 @@ use std::fs;
 use std::io;
 use std::path::PathBuf;
 
-use crate::buffer::{Buffer, CaseOp, Coalesce, Point};
+use crate::buffer::{Buffer, CaseOp, Coalesce, KillRing, Point};
 use crate::completion::{self, EditorCompletion};
 use crate::config::{Config, Settings};
 use crate::help;
@@ -180,6 +180,7 @@ pub struct Editor {
     pub highlighter: Highlighter,
     pub minibuffer: Option<Minibuffer>,
     pub search: Option<SearchState>,
+    pub kill_ring: KillRing,
     pub editor_completion: Option<EditorCompletion>,
     pub spell: SpellState,
     word_cache: Option<(u64, Vec<String>)>,
@@ -264,6 +265,7 @@ impl Editor {
             highlighter: Highlighter::new(mode, version),
             minibuffer: None,
             search: None,
+            kill_ring: KillRing::default(),
             editor_completion: None,
             spell,
             word_cache: None,
@@ -1289,7 +1291,7 @@ impl Editor {
             KeyCode::Tab => self.indent(),
             KeyCode::BackTab => self.unindent(),
             KeyCode::Backspace if key.alt => {
-                self.buffer.kill_word_backward();
+                self.buffer.kill_word_backward(&mut self.kill_ring);
             }
             KeyCode::Backspace => {
                 if !self.delete_active_region() && !self.auto_pair_backspace() {
@@ -1344,7 +1346,7 @@ impl Editor {
                 }
             }
             'k' => {
-                self.buffer.kill_line();
+                self.buffer.kill_line(&mut self.kill_ring);
             }
             'y' => self.yank(),
             'w' => self.kill_region(),
@@ -1393,7 +1395,7 @@ impl Editor {
             'f' => self.buffer.forward_word(),
             'b' => self.buffer.backward_word(),
             'd' => {
-                self.buffer.kill_word_forward();
+                self.buffer.kill_word_forward(&mut self.kill_ring);
             }
             'u' => {
                 self.buffer.transform_case(CaseOp::Upcase);
@@ -1409,7 +1411,7 @@ impl Editor {
             'v' => self.page(-1),
             'w' => self.copy_region(),
             'y' => {
-                if self.buffer.yank_pop() {
+                if self.buffer.yank_pop(&mut self.kill_ring) {
                     self.message = "Yank-pop".into();
                 } else {
                     self.message = "No previous yank".into();
@@ -1491,7 +1493,7 @@ impl Editor {
     }
 
     fn yank(&mut self) {
-        if self.buffer.yank() {
+        if self.buffer.yank(&mut self.kill_ring) {
             self.message = "Yanked".into();
         } else {
             self.message = "Kill ring is empty".into();
@@ -1508,7 +1510,7 @@ impl Editor {
     }
 
     fn kill_region(&mut self) {
-        if self.buffer.kill_region().is_empty() {
+        if self.buffer.kill_region(&mut self.kill_ring).is_empty() {
             self.message = "No active region".into();
         } else {
             self.message = "Killed region".into();
@@ -1516,7 +1518,7 @@ impl Editor {
     }
 
     fn copy_region(&mut self) {
-        if self.buffer.copy_region().is_empty() {
+        if self.buffer.copy_region(&mut self.kill_ring).is_empty() {
             self.message = "No active region".into();
         } else {
             self.message = "Copied region".into();
@@ -3714,6 +3716,33 @@ mod tests {
         ed.close_tab();
         assert!(ed.should_quit);
         fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn kill_ring_is_shared_across_tabs() {
+        let mut ed = editor("alpha");
+        ed.handle_key(Key::ctrl(' '));
+        for _ in 0..5 {
+            ed.handle_key(Key::ctrl('f'));
+        }
+        ed.handle_key(Key::alt('w'));
+
+        ed.new_tab();
+        ed.handle_key(Key::ctrl('y'));
+        assert_eq!(ed.buffer_text(), "alpha");
+
+        ed.handle_key(Key::ctrl('a'));
+        ed.handle_key(Key::ctrl(' '));
+        for _ in 0..5 {
+            ed.handle_key(Key::ctrl('f'));
+        }
+        ed.handle_key(Key::ctrl('w'));
+        assert_eq!(ed.buffer_text(), "");
+
+        ed.switch_tab(-1);
+        ed.handle_key(Key::alt('>'));
+        ed.handle_key(Key::ctrl('y'));
+        assert_eq!(ed.buffer_text(), "alphaalpha");
     }
 
     #[test]

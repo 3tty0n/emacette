@@ -7,6 +7,8 @@ Part of [emacette](../README.md).
 - `F1` opens the in-editor help.
 - `q`, `C-g`, or `F1` closes the help overlay.
 - In the help overlay, `C-n` / `C-p` / `SPC` scroll.
+- Inside tmux, these bindings take priority over tmux root bindings and a
+  conflicting prefix key. See [tmux](tmux.md).
 
 ## Files and git
 
@@ -65,7 +67,7 @@ Part of [emacette](../README.md).
 - `C-x C-x` swaps point and mark.
 - `C-x h` marks the whole buffer.
 - `C-g` deactivates the mark.
-- The kill ring is internal; it is not the system clipboard.
+- The kill ring is shared by all tabs; it is not the system clipboard.
 
 ## Searching
 
