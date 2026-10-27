@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Format
+        run: cargo fmt -- --check
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Unit and integration tests
+        run: cargo test
+      - name: Release build
+        run: cargo build --release
+      - name: Installer syntax
+        run: sh -n install.sh
+      - name: Installer test
+        run: |
+          set -eu
+          tmp=$(mktemp -d)
+          version=v0.0.0
+          mkdir -p "$tmp/releases/$version"
+          cp target/release/emacette "$tmp/releases/$version/emacette"
+          tar -czf "$tmp/releases/$version/emacette-$version-x86_64-unknown-linux-musl.tar.gz" \
+            -C "$tmp/releases/$version" emacette
+          (cd "$tmp/releases/$version" &&
+            sha256sum "emacette-$version-x86_64-unknown-linux-musl.tar.gz" \
+              > "emacette-$version-x86_64-unknown-linux-musl.tar.gz.sha256")
+          EMACETTE_BASE_URL="file://$tmp/releases" ./install.sh --release "$version" --prefix "$tmp/prefix"
+          "$tmp/prefix/bin/emacette" --version
+          ./install.sh --uninstall --prefix "$tmp/prefix"
+          test ! -e "$tmp/prefix/bin/emacette"
+          # Fallback: a release that only ships a glibc Linux asset.
+          mkdir -p "$tmp/releases-gnu/$version"
+          cp target/release/emacette "$tmp/releases-gnu/$version/emacette"
+          tar -czf "$tmp/releases-gnu/$version/emacette-$version-x86_64-unknown-linux-gnu.tar.gz" \
+            -C "$tmp/releases-gnu/$version" emacette
+          (cd "$tmp/releases-gnu/$version" &&
+            sha256sum "emacette-$version-x86_64-unknown-linux-gnu.tar.gz" \
+              > "emacette-$version-x86_64-unknown-linux-gnu.tar.gz.sha256")
+          EMACETTE_BASE_URL="file://$tmp/releases-gnu" ./install.sh --release "$version" --prefix "$tmp/prefix-gnu"
+          "$tmp/prefix-gnu/bin/emacette" --version
+          ./install.sh --uninstall --prefix "$tmp/prefix-gnu"
+          rm -rf "$tmp"
+      - name: PTY end-to-end tests
+        run: python3 scripts/e2e.py
