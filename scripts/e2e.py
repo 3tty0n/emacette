@@ -510,6 +510,26 @@ def test_search_and_insert():
     check("isearch prompt is visible", "I-search: gamma" in out.decode("utf-8", "replace"))
 
 
+def test_search_does_not_activate_region():
+    path = tmpfile("alpha\nbeta\ngamma\n")
+    # After RET the mark is set at the origin but must stay inactive, so DEL
+    # edits around point instead of deleting the traversed range.
+    code, out, _ = run(
+        [BIN, path],
+        [b"\x13", b"gamma", b"\r", b"\x7f", b"\x18\x13", b"\x18\x03"],
+        cols=COLS,
+        rows=ROWS,
+        expect=b"emacette",
+    )
+    with open(path, encoding="utf-8") as handle:
+        content = handle.read()
+    check(
+        "accepted search leaves no active region",
+        code == 0 and content == "alpha\nbetagamma\n",
+        repr(content),
+    )
+
+
 def test_help_overlay():
     path = tmpfile("")
     # F1 (xterm), q to close, then quit.
@@ -683,6 +703,7 @@ def main():
     test_quit_without_changes_is_immediate()
     test_escape_meta_word_motion()
     test_search_and_insert()
+    test_search_does_not_activate_region()
     test_help_overlay()
     test_git_commit()
     test_git_empty_message_warning()

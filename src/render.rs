@@ -1214,6 +1214,25 @@ mod tests {
     }
 
     #[test]
+    fn search_result_is_not_rendered_as_a_region() {
+        let mut ed = Editor::from_text("foo bar\nfoo baz", None, Config::default());
+        ed.handle_key(Key::ctrl('s'));
+        for c in "baz".chars() {
+            ed.handle_key(Key::ch(c));
+        }
+        ed.handle_key(Key::code(KeyCode::Enter));
+        let frame = render(&mut ed, 40, 8);
+        assert!(!frame.output.contains("48;5;237"));
+
+        // A deliberately set mark still highlights the region.
+        let mut ed = Editor::from_text("foo bar\nfoo baz", None, Config::default());
+        ed.handle_key(Key::ctrl(' '));
+        ed.handle_key(Key::ctrl('f'));
+        let frame = render(&mut ed, 40, 8);
+        assert!(frame.output.contains("48;5;237"));
+    }
+
+    #[test]
     fn modeline_shows_fill_and_wrap_flags() {
         let config = Config {
             auto_fill: true,

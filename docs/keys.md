@@ -73,7 +73,8 @@ Part of [emacette](../README.md).
 
 - `C-s` / `C-r` — incremental search forward / backward.
 - `C-s` / `C-r` again — next / previous match.
-- `RET` — accept the match and set mark at the starting point.
+- `RET` — accept the match and set the mark at the starting point without
+  activating the region; `C-x C-x` returns to the starting point.
 - `C-g` — abort the search and restore the original point.
 - Matching is case-insensitive unless the query contains an uppercase character.
 

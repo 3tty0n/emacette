@@ -120,6 +120,11 @@ pub struct Buffer {
     pub lines: Vec<Line>,
     pub point: Point,
     pub mark: Option<Point>,
+    /// Whether the mark is active. A mark can be set but inactive (for
+    /// example after incremental search): it still supports `C-x C-x` and
+    /// explicit region commands, but the range is not highlighted and
+    /// ordinary typing does not replace it.
+    mark_active: bool,
     pub path: Option<PathBuf>,
     pub modified: bool,
     pub line_ending: LineEnding,
@@ -186,6 +191,7 @@ impl Buffer {
             lines,
             point: Point::default(),
             mark: None,
+            mark_active: false,
             path,
             modified: false,
             line_ending: if crlf {
@@ -813,7 +819,19 @@ impl Buffer {
 
     // ------------------------------------------------------- kill / yank
 
+    /// The highlighted, *active* region. An inactive mark is not a region,
+    /// even though point and mark may differ.
     pub fn region(&self) -> Option<(Point, Point)> {
+        if !self.mark_active {
+            return None;
+        }
+        self.point_mark_range()
+    }
+
+    /// The range between point and mark whenever a mark is set, active or not.
+    /// Explicit region commands (`C-w`, `M-w`, `delete-region`, ...) use this
+    /// so they keep working after a search moved point away from the mark.
+    pub fn point_mark_range(&self) -> Option<(Point, Point)> {
         let mark = self.mark?;
         if mark == self.point {
             return None;
@@ -826,11 +844,19 @@ impl Buffer {
     }
 
     pub fn set_mark(&mut self) {
-        self.mark = Some(self.point);
+        self.push_mark(self.point, true);
+    }
+
+    /// Set the mark at `point`. `activate` controls whether the mark starts
+    /// out as an active (highlighted) region.
+    pub fn push_mark(&mut self, point: Point, activate: bool) {
+        self.mark = Some(point);
+        self.mark_active = activate;
     }
 
     pub fn deactivate_mark(&mut self) {
         self.mark = None;
+        self.mark_active = false;
     }
 
     pub fn exchange_point_and_mark(&mut self) -> bool {
@@ -844,22 +870,23 @@ impl Buffer {
     }
 
     pub fn mark_whole_buffer(&mut self) {
-        self.mark = Some(Point::new(0, 0));
+        self.push_mark(Point::new(0, 0), true);
         self.move_buffer_end();
     }
 
     pub fn kill_region(&mut self, kill_ring: &mut KillRing) -> String {
-        let Some((start, end)) = self.region() else {
+        let Some((start, end)) = self.point_mark_range() else {
             return String::new();
         };
         let removed = self.delete_range(start, end);
         kill_ring.push(&removed);
         self.mark = None;
+        self.mark_active = false;
         removed
     }
 
     pub fn copy_region(&mut self, kill_ring: &mut KillRing) -> String {
-        let Some((start, end)) = self.region() else {
+        let Some((start, end)) = self.point_mark_range() else {
             return String::new();
         };
         let text = self.text_between(start, end);
@@ -867,13 +894,14 @@ impl Buffer {
         text
     }
 
-    /// Delete the active region without touching the kill ring.
+    /// Delete the region without touching the kill ring.
     pub fn delete_region(&mut self) -> String {
-        let Some((start, end)) = self.region() else {
+        let Some((start, end)) = self.point_mark_range() else {
             return String::new();
         };
         let removed = self.delete_range(start, end);
         self.mark = None;
+        self.mark_active = false;
         removed
     }
 
@@ -979,7 +1007,7 @@ impl Buffer {
         let text = self.text_between(start, end);
         let transformed = apply_case(&text, op);
         self.replace_range(start, end, &transformed);
-        self.mark = None;
+        self.deactivate_mark();
         true
     }
 
@@ -1180,6 +1208,37 @@ mod tests {
         assert_eq!(buf.copy_region(&mut kill_ring), "bcd");
         assert_eq!(buf.kill_region(&mut kill_ring), "bcd");
         assert_eq!(buf.text(), "aef");
+    }
+
+    #[test]
+    fn inactive_mark_is_not_a_region() {
+        let mut buf = buffer("abcdef");
+        let mut kill_ring = KillRing::default();
+        buf.point = Point::new(0, 4);
+        buf.push_mark(Point::new(0, 1), false);
+        assert!(buf.region().is_none());
+        assert_eq!(
+            buf.point_mark_range(),
+            Some((Point::new(0, 1), Point::new(0, 4)))
+        );
+        // Explicit region commands still honour a mark that is only set.
+        assert_eq!(buf.copy_region(&mut kill_ring), "bcd");
+        assert!(buf.region().is_none());
+        assert_eq!(buf.kill_region(&mut kill_ring), "bcd");
+        assert_eq!(buf.text(), "aef");
+        assert!(buf.mark.is_none());
+    }
+
+    #[test]
+    fn deactivate_mark_ends_the_region() {
+        let mut buf = buffer("abcdef");
+        buf.point = Point::new(0, 1);
+        buf.set_mark();
+        buf.point = Point::new(0, 4);
+        assert_eq!(buf.region(), Some((Point::new(0, 1), Point::new(0, 4))));
+        buf.deactivate_mark();
+        assert!(buf.region().is_none());
+        assert!(buf.point_mark_range().is_none());
     }
 
     #[test]

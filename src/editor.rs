@@ -1982,7 +1982,10 @@ impl Editor {
         };
         if keep {
             if search.current.is_some() && self.buffer.point != search.origin {
-                self.buffer.mark = Some(search.origin);
+                // Emacs pushes the mark at the search origin without
+                // activating it: `C-x C-x` can go back, but the range is not
+                // highlighted and typing does not replace it.
+                self.buffer.push_mark(search.origin, false);
             }
         } else {
             self.buffer.set_point(search.origin);
@@ -3374,6 +3377,55 @@ mod tests {
         assert_eq!(ed.buffer.point, Point::new(1, 4));
         ed.handle_key(Key::code(KeyCode::Enter));
         assert!(ed.search.is_none());
+    }
+
+    #[test]
+    fn search_leaves_an_inactive_mark() {
+        let mut ed = editor("foo bar\nfoo baz");
+        ed.handle_key(Key::ctrl('s'));
+        for c in "baz".chars() {
+            ed.handle_key(Key::ch(c));
+        }
+        ed.handle_key(Key::code(KeyCode::Enter));
+        assert_eq!(ed.buffer.point, Point::new(1, 4));
+        assert_eq!(ed.buffer.mark, Some(Point::new(0, 0)));
+        assert!(ed.buffer.region().is_none());
+        // Editing keys act at point, not on the searched range.
+        ed.handle_key(Key::code(KeyCode::Delete));
+        assert_eq!(ed.buffer_text(), "foo bar\nfoo az");
+        assert!(ed.buffer.region().is_none());
+    }
+
+    #[test]
+    fn backward_search_leaves_an_inactive_mark() {
+        let mut ed = editor("alpha\nbeta\n");
+        ed.buffer.set_point(Point::new(1, 0));
+        ed.handle_key(Key::ctrl('r'));
+        for c in "alpha".chars() {
+            ed.handle_key(Key::ch(c));
+        }
+        ed.handle_key(Key::code(KeyCode::Enter));
+        assert_eq!(ed.buffer.point, Point::new(0, 0));
+        assert_eq!(ed.buffer.mark, Some(Point::new(1, 0)));
+        assert!(ed.buffer.region().is_none());
+        ed.handle_key(Key::code(KeyCode::Delete));
+        assert_eq!(ed.buffer_text(), "lpha\nbeta\n");
+        assert!(ed.buffer.region().is_none());
+    }
+
+    #[test]
+    fn exchange_point_and_mark_after_search_returns_to_origin() {
+        let mut ed = editor("foo bar\nfoo baz");
+        ed.handle_key(Key::ctrl('s'));
+        for c in "baz".chars() {
+            ed.handle_key(Key::ch(c));
+        }
+        ed.handle_key(Key::code(KeyCode::Enter));
+        ed.handle_key(Key::ctrl('x'));
+        ed.handle_key(Key::ctrl('x'));
+        assert_eq!(ed.buffer.point, Point::new(0, 0));
+        assert_eq!(ed.buffer.mark, Some(Point::new(1, 4)));
+        assert!(ed.buffer.region().is_none());
     }
 
     #[test]
