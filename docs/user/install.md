@@ -1,6 +1,6 @@
 # Installation
 
-Part of [emacette](../README.md).
+Part of the [emacette user guide](README.md).
 
 ## Requirements
 
@@ -51,6 +51,20 @@ From a checkout, or to pin a release:
 - `--uninstall` never removes `~/.config/emacette`.
 
 The URLs above assume the repository is `3tty0n/emacette`.
+
+## Migrating from nano-emacs
+
+The project and binary were renamed to emacette. Most existing setups keep
+working after updating the command:
+
+- The configuration file is now `~/.config/emacette/config`; the old
+  `~/.config/nano-emacs/config` is not read.
+- `EMACETTE_CONFIG` and `EMACETTE_DICT` replace `NANO_EMACS_CONFIG` and
+  `NANO_EMACS_DICT`. The old environment variables are still accepted as
+  fallbacks.
+- Update `git config --global core.editor` and any scripts that invoke `nemacs`
+  to use `emacette`.
+- `cargo uninstall nano-emacs` removes an old cargo-installed binary.
 
 ## Optional dictionary for spell checking
 

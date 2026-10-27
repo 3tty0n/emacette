@@ -1,6 +1,6 @@
 # Spelling
 
-Part of [emacette](../README.md).
+Part of the [emacette user guide](README.md).
 
 Spell checking is English-only for now. It highlights misspelled words in
 prose modes and can suggest corrections.

@@ -1,6 +1,6 @@
 # Git integration
 
-Part of [emacette](../README.md).
+Part of the [emacette user guide](README.md).
 
 ## Set as the default editor
 

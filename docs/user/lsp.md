@@ -1,6 +1,6 @@
 # Language servers (LSP)
 
-Part of [emacette](../README.md).
+Part of the [emacette user guide](README.md).
 
 `emacette` can talk to a language server over stdio. Configuration is per
 language; nothing is started unless `lsp_command` is set.

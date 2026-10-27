@@ -1,6 +1,6 @@
 # Configuration
 
-Part of [emacette](../README.md).
+Part of the [emacette user guide](README.md).
 
 ## Location
 
@@ -14,7 +14,7 @@ The first existing file is used:
 `~/.config/nano-emacs/config` is not read.
 
 An annotated example is available at
-[examples/config](../examples/config). Copy it to one of the paths above and
+[examples/config](../../examples/config). Copy it to one of the paths above and
 uncomment the settings you need.
 
 ## Format
@@ -43,7 +43,7 @@ spell_check = false
 # spell_dictionary = ~/.config/emacette/en.dic
 diagnostics_inline = true
 diagnostics_popup = true
-theme = dark                 # dark or light
+theme = solarized-dark       # see the theme list below
 confirm_on_quit = true
 
 [rust]
@@ -98,11 +98,34 @@ diagnostics_popup = false
   See [LSP](lsp.md).
 - `lsp_language_id` (`lsp-language-id`) — LSP `languageId` override for the
   current language.
-- `theme` — `dark` or `light`; default `dark`.
+- `theme` — colour scheme; default `dark`. See [Themes](#themes).
 - `confirm_on_quit` (`confirm-on-quit`) — ask before quitting when the buffer
   text differs from the last loaded or saved text; default `true`. An empty
   new buffer, or a buffer returned to its saved text with undo, quits without
   a prompt.
+
+## Themes
+
+Theme names ignore case, spaces, hyphens, and underscores, so
+`Solarized Dark`, `solarized-dark`, and `solarized_dark` are equivalent.
+
+| Value | Scheme |
+| --- | --- |
+| `dark` (`default`) | Neutral dark, the default |
+| `light` | Neutral light |
+| `solarized-dark` | Solarized Dark |
+| `solarized-light` | Solarized Light |
+| `gruvbox-dark` (`gruvbox`) | Gruvbox Dark |
+| `gruvbox-light` | Gruvbox Light |
+| `nord` | Nord |
+| `dracula` | Dracula |
+| `monokai` | Monokai |
+| `one-dark` | One Dark |
+| `tokyo-night` | Tokyo Night |
+
+Themes use the terminal's 256-colour palette, so enable 256 colours in the
+terminal for the intended appearance. `M-x` changes other settings at runtime,
+but the theme is read from the configuration file at startup.
 
 ## Per-language options
 

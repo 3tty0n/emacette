@@ -1,6 +1,6 @@
 # Completion
 
-Part of [emacette](../README.md).
+Part of the [emacette user guide](README.md).
 
 ## Minibuffer completion
 

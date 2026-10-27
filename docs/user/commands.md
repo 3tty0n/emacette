@@ -1,6 +1,6 @@
 # Commands
 
-Part of [emacette](../README.md).
+Part of the [emacette user guide](README.md).
 
 `M-x` runs a command by name. See [Completion](completion.md) for editor and
 minibuffer completion, and [Spelling](spelling.md) for spell checking.

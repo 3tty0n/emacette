@@ -13,4 +13,4 @@ out so the file works without installing every server.
 
 The old `~/.config/nano-emacs/config` is not read.
 
-See [Configuration](../docs/configuration.md) for every option.
+See [Configuration](../docs/user/configuration.md) for every option.

@@ -1,6 +1,6 @@
 # Languages
 
-Part of [emacette](../README.md).
+Part of the [emacette user guide](README.md).
 
 Syntax highlighting covers 40 languages and formats.
 

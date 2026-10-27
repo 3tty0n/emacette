@@ -1,6 +1,6 @@
 # Tabs
 
-Part of [emacette](../README.md).
+Part of the [emacette user guide](README.md).
 
 Multiple files can be open at once. A tab bar appears at the top of the screen
 when two or more tabs are open.

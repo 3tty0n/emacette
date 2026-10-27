@@ -1,6 +1,6 @@
 # Key bindings
 
-Part of [emacette](../README.md).
+Part of the [emacette user guide](README.md).
 
 - `C-` means Ctrl.
 - `M-` means Alt, or ESC followed by the key.

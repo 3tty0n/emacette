@@ -1,6 +1,6 @@
 # tmux
 
-Part of [emacette](../README.md).
+Part of the [emacette user guide](README.md).
 
 tmux handles its own key tables before forwarding input to the program in a
 pane. While emacette is running its key bindings take priority:
