@@ -736,6 +736,15 @@ mod tests {
     }
 
     #[test]
+    fn parses_every_builtin_theme() {
+        for name in ThemeName::ALL {
+            let mut config = Config::default();
+            config.parse(&format!("theme = {}\n", name.name()));
+            assert_eq!(config.theme, name);
+        }
+    }
+
+    #[test]
     fn strips_inline_comments_but_keeps_quoted_hashes() {
         let mut config = Config::default();
         config.parse(

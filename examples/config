@@ -44,7 +44,7 @@ diagnostics_popup = true
 # Git commit message prefix.  Per-language comment_start takes precedence.
 # comment_char = "#"
 
-theme = dark                 # dark or light
+theme = dark                 # dark, light, solarized-dark, gruvbox-dark, ...
 confirm_on_quit = true
 
 # ---------------------------------------------------------------------------
