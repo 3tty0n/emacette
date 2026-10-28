@@ -63,6 +63,7 @@ src/minibuffer.rs   minibuffer prompt, history, and editing
 src/completion.rs   editor-side completion candidates
 src/search.rs       incremental search helpers
 src/view.rs         viewport, scrolling, wrapping, and display widths
+src/window.rs       split tree and per-pane viewports
 src/render.rs       ANSI frame construction and incremental repaint
 src/syntax.rs       lexers, token spans, and language detection
 src/highlight.rs    per-line syntax highlighting cache
@@ -87,8 +88,9 @@ docs/development/   this guide
   finds it.
 - **Buffer behavior, undo, or kill ring:** `src/buffer.rs`; keep it
   terminal-independent.
-- **Rendering, layout, or colors:** `src/render.rs`, `src/view.rs`, and
-  `src/theme.rs`. Verify both truncate and soft-wrap modes.
+- **Rendering, layout, or colors:** `src/render.rs`, `src/view.rs`,
+  `src/window.rs`, and `src/theme.rs`. Verify both truncate and soft-wrap
+  modes, with and without splits.
 - **A language or format:** `src/syntax.rs` for detection and lexing. Update
   [Languages](../user/languages.md) and, when the language should enable
   editor completion automatically, the mode classification.

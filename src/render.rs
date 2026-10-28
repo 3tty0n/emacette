@@ -16,6 +16,7 @@ use crate::view::{
     advance_screen_row, cell_width, char_width, cursor_segment, display_col, segment_start,
     wrap_end,
 };
+use crate::window::{Layout, SplitDir};
 
 pub struct Frame {
     pub output: String,
@@ -84,12 +85,11 @@ impl Renderer {
     }
 
     pub fn render(&mut self, editor: &mut Editor, width: usize, height: usize) -> Frame {
-        editor.view.width = width.max(1);
-        editor.view.height = height.max(1);
-        editor.view.tab_width = editor.settings.tab_width;
-        editor.view.line_numbers = editor.settings.line_numbers;
-        editor.view.highlight_trailing_ws = editor.settings.highlight_trailing_ws;
-        editor.view.truncate_lines = editor.settings.truncate_lines;
+        let width = width.max(1);
+        let height = height.max(1);
+        editor.terminal_width = width;
+        editor.terminal_height = height;
+
         let (completion_rows, diagnostic_rows, menu_rows) = if editor.overlay.is_some() {
             (0, 0, 0)
         } else {
@@ -101,69 +101,74 @@ impl Renderer {
                 0
             };
             let diagnostics = editor.diagnostic_popup().len().min(4);
-            let menu = (completion + diagnostics).min(editor.view.height.saturating_sub(3));
+            let menu = (completion + diagnostics).min(height.saturating_sub(3));
             let completion = completion.min(menu);
             let diagnostics = diagnostics.min(menu - completion);
             (completion, diagnostics, menu)
         };
-        editor.view.menu_rows = menu_rows;
-        let tab_rows =
-            if editor.tab_count() > 1 && editor.overlay.is_none() && editor.view.height >= 4 {
-                1
-            } else {
-                0
-            };
-        editor.view.tab_rows = tab_rows;
+        let tab_rows = if editor.tab_count() > 1 && editor.overlay.is_none() && height >= 4 {
+            1
+        } else {
+            0
+        };
         editor.sync_highlighter();
-        editor.view.ensure_visible(&editor.buffer);
 
         if editor.needs_redraw {
             self.rows.clear();
             editor.needs_redraw = false;
         }
 
-        let terminal_height = editor.view.height;
         // The bottom two rows are the mode line and the echo area.  On a
         // terminal with fewer than three rows there is no text area.
-        let body_rows = terminal_height
+        let body_rows = height
             .saturating_sub(2)
-            .saturating_sub(editor.view.menu_rows)
+            .saturating_sub(menu_rows)
             .saturating_sub(tab_rows);
 
-        // The completion popup is anchored to the cursor's screen cell, so
-        // compute the cursor before building the text rows.
-        let body_cursor = if editor.overlay.is_some() {
-            None
+        let (text_rows, body_cursor) = if editor.overlay.is_some() {
+            let scroll = editor.overlay.map(|overlay| overlay.scroll).unwrap_or(0);
+            (build_help_rows(editor, body_rows, scroll), None)
+        } else if editor.windows.len() == 1 {
+            editor.view.width = width;
+            editor.view.height = height;
+            editor.view.chrome_rows = 2;
+            editor.view.menu_rows = menu_rows;
+            editor.view.tab_rows = tab_rows;
+            editor.view.ensure_visible(&editor.buffer);
+
+            // The completion popup is anchored to the cursor's screen cell,
+            // so compute the cursor before building the text rows.
+            let body_cursor = buffer_cursor(editor);
+            let gutter = editor.view.gutter(editor.buffer.line_count());
+            let popup = if editor.minibuffer.is_none() {
+                build_completion_popup(editor, body_rows, body_cursor, gutter)
+            } else {
+                None
+            };
+            let rows = build_text_rows(editor, body_rows, popup.as_ref());
+            editor.sync_active_view();
+            (rows, body_cursor)
         } else {
-            buffer_cursor(editor)
-        };
-        let gutter = editor.view.gutter(editor.buffer.line_count());
-        let popup = if editor.overlay.is_none() && editor.minibuffer.is_none() {
-            build_completion_popup(editor, body_rows, body_cursor, gutter)
-        } else {
-            None
+            render_split(editor, body_rows, width)
         };
 
-        let mut rows: Vec<String> = Vec::with_capacity(terminal_height);
-        let mut cursor = None;
+        let mut rows: Vec<String> = Vec::with_capacity(height);
         if tab_rows > 0 {
             rows.push(build_tab_bar(editor));
         }
-        if let Some(overlay) = editor.overlay {
-            rows.extend(build_help_rows(editor, body_rows, overlay.scroll));
-        } else {
-            rows.extend(build_text_rows(editor, body_rows, popup.as_ref()));
+        rows.extend(text_rows);
+        if editor.overlay.is_none() {
             rows.extend(build_completion_rows(editor, completion_rows));
             rows.extend(build_diagnostic_rows(editor, diagnostic_rows));
-            cursor = body_cursor
-                .filter(|&(_, y)| body_rows > 0 && y as usize <= body_rows)
-                .map(|(x, y)| (x, y + tab_rows as u16));
         }
-        if terminal_height >= 2 {
+        if height >= 2 {
             rows.push(build_modeline(editor));
         }
         let (echo, echo_cursor) = build_echo(editor);
         rows.push(echo);
+        let mut cursor = body_cursor
+            .filter(|&(_, y)| body_rows > 0 && y as usize <= body_rows)
+            .map(|(x, y)| (x, y + tab_rows as u16));
         if echo_cursor.is_some() {
             cursor = echo_cursor;
         }
@@ -235,6 +240,218 @@ impl Renderer {
 /// Convenience wrapper for tests and one-shot rendering.
 pub fn render(editor: &mut Editor, width: usize, height: usize) -> Frame {
     Renderer::new().render(editor, width, height)
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct Rect {
+    x: usize,
+    y: usize,
+    width: usize,
+    height: usize,
+}
+
+fn child_rects(rect: Rect, dir: SplitDir) -> (Rect, Rect) {
+    const SEPARATOR: usize = 1;
+    match dir {
+        SplitDir::AboveBelow => {
+            let available = rect.height.saturating_sub(SEPARATOR);
+            let first_height = available / 2;
+            let second_height = available - first_height;
+            (
+                Rect {
+                    height: first_height,
+                    ..rect
+                },
+                Rect {
+                    y: rect.y + first_height + SEPARATOR,
+                    height: second_height,
+                    ..rect
+                },
+            )
+        }
+        SplitDir::LeftRight => {
+            let available = rect.width.saturating_sub(SEPARATOR);
+            let first_width = available / 2;
+            let second_width = available - first_width;
+            (
+                Rect {
+                    width: first_width,
+                    ..rect
+                },
+                Rect {
+                    x: rect.x + first_width + SEPARATOR,
+                    width: second_width,
+                    ..rect
+                },
+            )
+        }
+    }
+}
+
+fn assign_window_rects(
+    editor: &mut Editor,
+    node: &Layout,
+    rect: Rect,
+    active: usize,
+    active_rect: &mut Rect,
+) {
+    match node {
+        Layout::Leaf(id) => {
+            let mut view = editor.windows.views()[*id];
+            view.width = rect.width;
+            view.height = rect.height;
+            view.menu_rows = 0;
+            view.tab_rows = 0;
+            view.chrome_rows = 0;
+            view.tab_width = editor.settings.tab_width;
+            view.line_numbers = editor.settings.line_numbers;
+            view.highlight_trailing_ws = editor.settings.highlight_trailing_ws;
+            view.truncate_lines = editor.settings.truncate_lines;
+            if *id == active {
+                view.ensure_visible(&editor.buffer);
+                *active_rect = rect;
+                editor.view = view;
+            } else {
+                view.clamp(&editor.buffer);
+            }
+            editor.windows.views_mut()[*id] = view;
+        }
+        Layout::Split { dir, first, second } => {
+            let (first_rect, second_rect) = child_rects(rect, *dir);
+            assign_window_rects(editor, first, first_rect, active, active_rect);
+            assign_window_rects(editor, second, second_rect, active, active_rect);
+        }
+    }
+}
+
+fn render_layout(
+    editor: &mut Editor,
+    node: &Layout,
+    rect: Rect,
+    active: usize,
+    popup: Option<&CompletionPopup>,
+) -> Vec<String> {
+    if rect.width == 0 || rect.height == 0 {
+        return vec![String::new(); rect.height];
+    }
+    match node {
+        Layout::Leaf(id) => {
+            editor.view = editor.windows.views()[*id];
+            let popup = if *id == active { popup } else { None };
+            let rows = build_text_rows(editor, rect.height, popup);
+            let rows = rows
+                .into_iter()
+                .map(|row| pad_row(row, rect.width))
+                .collect();
+            editor.windows.views_mut()[*id] = editor.view;
+            rows
+        }
+        Layout::Split { dir, first, second } => {
+            let (first_rect, second_rect) = child_rects(rect, *dir);
+            let mut first_rows = render_layout(editor, first, first_rect, active, popup);
+            let second_rows = render_layout(editor, second, second_rect, active, popup);
+            match dir {
+                SplitDir::AboveBelow => {
+                    first_rows.push(separator_row(rect.width, &editor.theme));
+                    first_rows.extend(second_rows);
+                }
+                SplitDir::LeftRight => {
+                    let separator = separator_col(&editor.theme);
+                    first_rows = first_rows
+                        .into_iter()
+                        .zip(second_rows)
+                        .map(|(left, right)| format!("{left}{separator}{right}"))
+                        .collect();
+                }
+            }
+            first_rows
+        }
+    }
+}
+
+fn render_split(
+    editor: &mut Editor,
+    body_rows: usize,
+    width: usize,
+) -> (Vec<String>, Option<(u16, u16)>) {
+    editor.sync_active_view();
+    let layout = editor.windows.layout().clone();
+    let active = editor.windows.active();
+    let root = Rect {
+        x: 0,
+        y: 0,
+        width,
+        height: body_rows,
+    };
+    let mut active_rect = root;
+    assign_window_rects(editor, &layout, root, active, &mut active_rect);
+
+    editor.view = *editor.windows.active_view();
+    editor.view.ensure_visible(&editor.buffer);
+    editor.windows.views_mut()[active] = editor.view;
+
+    let active_cursor = buffer_cursor(editor);
+    let gutter = editor.view.gutter(editor.buffer.line_count());
+    let popup = if editor.minibuffer.is_none() {
+        build_completion_popup(editor, active_rect.height, active_cursor, gutter)
+    } else {
+        None
+    };
+
+    let rows = render_layout(editor, &layout, root, active, popup.as_ref());
+    editor.view = *editor.windows.active_view();
+    let cursor = active_cursor
+        .filter(|(_, y)| active_rect.height > 0 && *y as usize <= active_rect.height)
+        .map(|(x, y)| (active_rect.x as u16 + x, active_rect.y as u16 + y));
+    (rows, cursor)
+}
+
+fn separator_row(width: usize, theme: &Theme) -> String {
+    let mut row = String::new();
+    push_style(&mut row, theme.gutter);
+    row.push_str(&"-".repeat(width));
+    row.push_str("\x1b[0m");
+    row
+}
+
+fn separator_col(theme: &Theme) -> String {
+    let mut column = String::new();
+    push_style(&mut column, theme.gutter);
+    column.push('|');
+    column.push_str("\x1b[0m");
+    column
+}
+
+/// Display width of a styled row, ignoring SGR escape sequences.
+fn ansi_width(text: &str) -> usize {
+    let mut width = 0usize;
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            if chars.peek() == Some(&'[') {
+                chars.next();
+                for c in chars.by_ref() {
+                    if c.is_ascii_alphabetic() || c == '~' {
+                        break;
+                    }
+                }
+            }
+        } else {
+            width += cell_width(c);
+        }
+    }
+    width
+}
+
+/// Give every pane row the exact width of its rectangle so panes line up when
+/// they are concatenated side by side.
+fn pad_row(mut row: String, width: usize) -> String {
+    let used = ansi_width(&row);
+    row.push_str("\x1b[0m");
+    if used < width {
+        row.push_str(&" ".repeat(width - used));
+    }
+    row
 }
 
 fn push_style(out: &mut String, style: Style) {
@@ -791,7 +1008,7 @@ fn build_diagnostic_rows(editor: &Editor, rows: usize) -> Vec<String> {
         return Vec::new();
     }
     let theme = editor.theme.clone();
-    let width = editor.view.width;
+    let width = editor.terminal_width;
     let mut out = Vec::with_capacity(rows);
     for diagnostic in diagnostics.into_iter().take(rows) {
         let marker = match diagnostic.severity {
@@ -826,7 +1043,7 @@ fn build_diagnostic_rows(editor: &Editor, rows: usize) -> Vec<String> {
 }
 
 fn build_tab_bar(editor: &Editor) -> String {
-    let width = editor.view.width;
+    let width = editor.terminal_width;
     let labels = editor.tab_labels();
     let theme = editor.theme.clone();
     let active = labels
@@ -879,7 +1096,7 @@ fn build_tab_bar(editor: &Editor) -> String {
 }
 
 fn build_modeline(editor: &Editor) -> String {
-    let width = editor.view.width;
+    let width = editor.terminal_width;
     let name = editor.buffer.display_name();
     let star = if editor.buffer.modified { "**" } else { "--" };
     let point = editor.buffer.point;
@@ -969,7 +1186,7 @@ fn layout_modeline(left: &str, right: &str, width: usize) -> String {
 }
 
 fn build_echo(editor: &Editor) -> (String, Option<(u16, u16)>) {
-    let width = editor.view.width;
+    let width = editor.terminal_width;
     let theme = &editor.theme;
     let mut row = String::new();
 
@@ -999,7 +1216,7 @@ fn build_echo(editor: &Editor) -> (String, Option<(u16, u16)>) {
         let x = cursor_offset.saturating_sub(skip) + 1;
         return (
             row,
-            Some(((x.min(width).max(1)) as u16, editor.view.height as u16)),
+            Some(((x.min(width).max(1)) as u16, editor.terminal_height as u16)),
         );
     }
 
@@ -1195,7 +1412,7 @@ fn build_completion_rows(editor: &Editor, menu_rows: usize) -> Vec<String> {
     if menu_rows == 0 {
         return Vec::new();
     }
-    let width = editor.view.width.max(1);
+    let width = editor.terminal_width.max(1);
     let Some((candidates, selected)) = editor.completion_menu() else {
         return vec![String::new(); menu_rows];
     };
@@ -1246,7 +1463,7 @@ fn build_completion_rows(editor: &Editor, menu_rows: usize) -> Vec<String> {
 
 fn build_help_rows(editor: &Editor, body_rows: usize, scroll: usize) -> Vec<String> {
     let theme = &editor.theme;
-    let width = editor.view.width;
+    let width = editor.terminal_width;
     let mut rows = Vec::with_capacity(body_rows);
     for screen_row in 0..body_rows {
         let mut line = String::new();
@@ -1457,6 +1674,83 @@ mod tests {
         // Point is on the last body row, so the popup has to go above it.
         let (_, y) = frame.cursor.expect("cursor should stay visible");
         assert_eq!(y as usize, 8);
+    }
+
+    #[test]
+    fn split_screen_renders_panes_and_moves_the_cursor() {
+        let mut ed = Editor::from_text("one\ntwo\nthree\nfour\nfive\n", None, Config::default());
+        ed.handle_key(Key::ctrl('x'));
+        ed.handle_key(Key::ch('2'));
+        let frame = render(&mut ed, 40, 12);
+        let plain = strip_ansi(&frame.output);
+        assert!(plain.contains("one"), "{plain:?}");
+        assert!(plain.contains("----"), "{plain:?}");
+        assert_eq!(frame.cursor.map(|(_, y)| y), Some(1));
+
+        ed.handle_key(Key::ctrl('x'));
+        ed.handle_key(Key::ch('o'));
+        let frame = render(&mut ed, 40, 12);
+        assert_eq!(frame.cursor.map(|(_, y)| y), Some(6));
+    }
+
+    #[test]
+    fn split_panes_keep_independent_scroll_positions() {
+        let text: String = (1..=30).map(|i| format!("line {i:02}\n")).collect();
+        let mut ed = Editor::from_text(&text, None, Config::default());
+        ed.handle_key(Key::ctrl('x'));
+        ed.handle_key(Key::ch('2'));
+        ed.handle_key(Key::alt('>'));
+        let frame = render(&mut ed, 40, 14);
+        let plain = strip_ansi(&frame.output);
+        // The active top pane follows point to the end of the buffer while
+        // the inactive bottom pane stays at the beginning.
+        assert!(plain.contains("line 30"), "{plain:?}");
+        assert!(plain.contains("line 01"), "{plain:?}");
+        assert!(plain.contains("line 02"), "{plain:?}");
+    }
+
+    #[test]
+    fn split_and_wide_characters_render() {
+        let mut ed = Editor::from_text("日本語のテスト\n二行目\n", None, Config::default());
+        ed.handle_key(Key::ctrl('x'));
+        ed.handle_key(Key::ch('3'));
+        let frame = render(&mut ed, 40, 10);
+        let plain = strip_ansi(&frame.output);
+        assert!(plain.contains("日本語"), "{plain:?}");
+        assert!(plain.contains('|'), "{plain:?}");
+        assert!(frame.cursor.is_some());
+    }
+
+    #[test]
+    fn completion_popup_stays_in_the_active_split_pane() {
+        let config = Config {
+            editor_completion: true,
+            ..Config::default()
+        };
+        let mut ed = Editor::from_text("alpha alphabet ", None, config);
+        ed.handle_key(Key::ctrl('x'));
+        ed.handle_key(Key::ch('3'));
+        ed.buffer.set_point(crate::buffer::Point::new(0, 15));
+        for c in "al".chars() {
+            ed.handle_key(Key::ch(c));
+        }
+        let frame = render(&mut ed, 60, 12);
+        let plain = strip_ansi(&frame.output);
+        assert!(plain.contains("| > alpha"), "{plain:?}");
+        assert!(frame.cursor.is_some());
+    }
+
+    #[test]
+    fn tiny_split_terminal_does_not_panic() {
+        let mut ed = Editor::from_text("one\ntwo\n", None, Config::default());
+        ed.handle_key(Key::ctrl('x'));
+        ed.handle_key(Key::ch('2'));
+        ed.handle_key(Key::ctrl('x'));
+        ed.handle_key(Key::ch('3'));
+        for (w, h) in [(4, 3), (8, 4), (10, 5)] {
+            let frame = render(&mut ed, w, h);
+            assert!(!frame.output.is_empty());
+        }
     }
 
     fn draw_with_overlay(chars: &[char], start: usize, width: usize, content: &str) -> String {

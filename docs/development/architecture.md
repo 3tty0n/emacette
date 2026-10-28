@@ -63,6 +63,7 @@ enters the alternate screen, installs the tmux key guard, and then runs:
 | `completion.rs` | Editor completion candidates, selected entry, word helpers |
 | `search.rs` | Forward/backward incremental-search primitives |
 | `view.rs` | Viewport, scrolling, truncation vs wrapping, display-width helpers |
+| `window.rs` | Split tree and the set of per-pane viewports |
 | `render.rs` | ANSI frame generation, incremental repaint, layout of all screen rows |
 | `syntax.rs` | `Lang` detection, token spans, line-oriented lexers |
 | `highlight.rs` | Lazy per-row highlight cache keyed by buffer version |
@@ -75,20 +76,40 @@ enters the alternate screen, installs the tmux key guard, and then runs:
 
 ## Editor state and tabs
 
-`Editor` owns the state of the active tab: `Buffer`, `View`, language mode,
-effective `Settings`, `Highlighter`, minibuffer, search, completion, spell
-state, LSP client, and diagnostics. Inactive tabs are stored as `TabState`.
+`Editor` owns the state of the active tab: `Buffer`, the active `View`, the
+window set (`WindowSet`), language mode, effective `Settings`, `Highlighter`,
+minibuffer, search, completion, spell state, LSP client, and diagnostics.
+Inactive tabs are stored as `TabState`.
 
 Switching tabs is a stash/load operation:
 
-1. `stash_active_tab()` moves the active `Buffer` and related state into the
-   current `TabState`.
+1. `stash_active_tab()` moves the active `Buffer`, its window layout, and
+   related state into the current `TabState`.
 2. `active_tab` changes.
 3. `load_active_tab()` moves the stored state back into `Editor` and rebuilds
    the highlighter.
 
 The kill ring and command history live on `Editor`, not on a tab, so they are
 shared. Unsaved buffers are never discarded by tab switching.
+
+## Windows
+
+`window.rs` models the split layout as a binary tree of `Layout::Leaf` and
+`Layout::Split` nodes. `WindowSet` holds one `View` per leaf, the tree, and the
+active window index.
+
+- All panes display the active buffer. They share point, text, mark, and undo
+  state, but each `View` keeps its own `top`, `top_offset`, and `left`.
+- `Editor.view` is the live copy of the active pane. Input and movement
+  commands work on it; `sync_active_view()` copies it back into the window set
+  before rendering, switching windows, or stashing a tab.
+- `C-x 2` / `C-x 3` split the active leaf and leave the original pane active.
+  `C-x o` cycles through leaves in layout order; `C-x 0` and `C-x 1` collapse
+  the tree.
+- Window layouts are part of `TabState`, so each tab restores its own splits
+  and scroll positions.
+- The frame rows (tab bar, mode line, echo area, menus) are shared; pane
+  rectangles exclude them. Pane views therefore set `View.chrome_rows = 0`.
 
 ## Input dispatch
 
@@ -141,6 +162,12 @@ The renderer keeps the previous frame and compares rows by string equality. On
 a normal frame only changed rows are written. Full repaints happen on startup,
 resize, and `C-l`. Frames are wrapped in DEC 2026 synchronized-update sequences
 when the terminal supports them.
+
+When the screen is split, the text body is a rectangle partitioned recursively
+by the layout tree. Each leaf is rendered into its own rows, padded to the
+rectangle width, and the results are joined with a horizontal `-` row or a
+vertical `|` column. The mode line and echo area remain global rows. The
+completion popup is built for the active pane, so it stays inside that pane.
 
 Two layout modes are supported:
 
@@ -244,5 +271,8 @@ the editor and view.
   highlighter may show stale spans.
 - Do not do blocking I/O on the UI thread; LSP is asynchronous by design.
 - Keep `editor.rs` and `buffer.rs` free of terminal dependencies.
+- Call `sync_active_view()` before reading the window set; `Editor.view` is the
+  source of truth while handling input.
 - Every screen row added above the body must be accounted for in layout and
-  cursor positioning.
+  cursor positioning. Split pane heights exclude the frame rows, so their
+  views use `chrome_rows = 0`.

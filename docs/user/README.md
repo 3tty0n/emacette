@@ -15,6 +15,7 @@ New to emacette? Start with the [quick start](../../README.md#quick-start) and
 - [Key bindings](keys.md) — every key, regions, search, and minibuffer editing.
 - [Commands](commands.md) — commands available through `M-x`.
 - [Tabs](tabs.md) — work with several files at once.
+- [Windows](windows.md) — split the screen and move between panes.
 - [tmux](tmux.md) — keep emacette's key bindings usable inside tmux panes.
 
 ## Configure and extend

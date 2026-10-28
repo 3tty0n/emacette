@@ -54,6 +54,14 @@ minibuffer completion, and [Spelling](spelling.md) for spell checking.
 - `ispell-buffer` — check the whole buffer and report the count.
 - `spell-check-buffer` — alias for `ispell-buffer`.
 
+## Windows
+
+- `split-window-below` — split the current window, one pane above the other.
+- `split-window-right` — split the current window, one pane left of the other.
+- `other-window` — move to the next window.
+- `delete-window` — delete the current window.
+- `delete-other-windows` — delete every other window.
+
 ## Regions
 
 - `set-mark-command` — set the mark.
@@ -76,4 +84,5 @@ minibuffer completion, and [Spelling](spelling.md) for spell checking.
 - [Spelling](spelling.md) — dictionary discovery, highlighting, and `M-$`.
 - [LSP](lsp.md) — language servers, diagnostics, and completion.
 - [Tabs](tabs.md) — multiple files, switching, and closing tabs.
+- [Windows](windows.md) — split panes, focus, and layout.
 - [Key bindings](keys.md) — every key, including region and search behaviour.

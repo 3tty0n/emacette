@@ -23,6 +23,17 @@ Part of the [emacette user guide](README.md).
 - `C-c C-c` — save and quit, finishing a git commit.
 - `C-c C-k` — abort a git commit without saving (prompts only when changed).
 
+## Windows
+
+- `C-x 2` — split the current window, one pane above the other.
+- `C-x 3` — split the current window, one pane left of the other.
+- `C-x o` — move to the other window.
+- `C-x 0` — delete the current window.
+- `C-x 1` — delete every other window.
+
+Split panes share the buffer and point but keep their own scroll position.
+See [Windows](windows.md).
+
 ## Moving
 
 - `C-f` / `C-b` — forward / backward one character.

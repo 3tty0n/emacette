@@ -445,6 +445,37 @@ def test_tabs_switch_files():
     shutil.rmtree(directory, ignore_errors=True)
 
 
+def test_window_split():
+    path = tmpfile("alpha\nbeta\ngamma\n")
+    code, out, _ = run(
+        [BIN, path],
+        [
+            b"\x182",  # C-x 2: split below
+            b"\x183",  # C-x 3: split right
+            b"\x18o",  # C-x o: other window
+            b"\x180",  # C-x 0: delete window
+            b"\x181",  # C-x 1: delete other windows
+            b"\x18\x13",
+            b"\x18\x03",
+        ],
+        cols=COLS,
+        rows=ROWS,
+        expect=b"emacette",
+    )
+    with open(path, encoding="utf-8") as handle:
+        content = handle.read()
+    check(
+        "window split keys render panes",
+        code == 0 and b"----" in out,
+        repr(out[-300:]),
+    )
+    check(
+        "window splits leave the buffer intact",
+        content == "alpha\nbeta\ngamma\n",
+        repr(content),
+    )
+
+
 def test_quit_without_changes_is_immediate():
     directory = tempfile.mkdtemp(prefix="emacette-e2e-")
     path = os.path.join(directory, "note.txt")
@@ -700,6 +731,7 @@ def main():
     test_editor_completion_menu()
     test_spell_check()
     test_tabs_switch_files()
+    test_window_split()
     test_quit_without_changes_is_immediate()
     test_escape_meta_word_motion()
     test_search_and_insert()

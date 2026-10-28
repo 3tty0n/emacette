@@ -16,3 +16,4 @@ pub mod syntax;
 pub mod theme;
 pub mod tmux;
 pub mod view;
+pub mod window;

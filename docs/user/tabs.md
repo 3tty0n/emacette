@@ -38,7 +38,7 @@ The kill ring is shared by all tabs: text killed or copied in one tab can be
 yanked in another. Each tab keeps its own:
 
 - buffer text, point, mark, undo/redo history, and line ending
-- scroll position
+- window layout and each pane's scroll position
 - language mode and effective settings
 - spelling state
 - LSP server and diagnostics
@@ -54,8 +54,13 @@ tab is highlighted.
 - `tab-new`
 - `tab-close`
 
+## Splits
+
+Each tab remembers its own window layout. Splitting one tab does not split the
+others; switching back restores the panes and their scroll positions. See
+[Windows](windows.md).
+
 ## Limitations
 
 - No tab reordering, pinning, or drag-and-drop.
-- No window splits or multiple panes.
 - Very long tab bars show the active tab area and elide older tabs.

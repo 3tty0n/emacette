@@ -18,6 +18,7 @@ use crate::spell::{SpellChecker, SpellState};
 use crate::syntax::{Lang, Span, Tok};
 use crate::theme::Theme;
 use crate::view::{char_width, display_col, View};
+use crate::window::{SplitDir, WindowSet, MAX_WINDOWS};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Cmd {
@@ -60,6 +61,11 @@ pub enum Cmd {
     SearchBackward,
     Beginning,
     End,
+    SplitWindowBelow,
+    SplitWindowRight,
+    OtherWindow,
+    DeleteWindow,
+    DeleteOtherWindows,
 }
 
 pub const COMMANDS: &[(&str, Cmd)] = &[
@@ -111,6 +117,11 @@ pub const COMMANDS: &[(&str, Cmd)] = &[
     ("describe-bindings", Cmd::Help),
     ("search-forward", Cmd::SearchForward),
     ("search-backward", Cmd::SearchBackward),
+    ("split-window-below", Cmd::SplitWindowBelow),
+    ("split-window-right", Cmd::SplitWindowRight),
+    ("other-window", Cmd::OtherWindow),
+    ("delete-window", Cmd::DeleteWindow),
+    ("delete-other-windows", Cmd::DeleteOtherWindows),
     ("beginning-of-buffer", Cmd::Beginning),
     ("end-of-buffer", Cmd::End),
 ];
@@ -151,9 +162,7 @@ struct ParenCache {
 
 struct TabState {
     buffer: Option<Buffer>,
-    top: usize,
-    top_offset: usize,
-    left: usize,
+    windows: WindowSet,
     lsp: Option<LspClient>,
     diagnostics: Vec<Diagnostic>,
     last_lsp_version: u64,
@@ -175,6 +184,9 @@ pub struct Editor {
     pub mode: Lang,
     pub theme: Theme,
     pub view: View,
+    pub windows: WindowSet,
+    pub terminal_width: usize,
+    pub terminal_height: usize,
     pub config: Config,
     pub settings: Settings,
     pub highlighter: Highlighter,
@@ -255,11 +267,15 @@ impl Editor {
             truncate_lines: settings.truncate_lines,
             ..View::default()
         };
+        let windows = WindowSet::single(view);
         let mut editor = Self {
             buffer,
             mode,
             theme,
             view,
+            windows,
+            terminal_width: 80,
+            terminal_height: 24,
             config,
             settings: settings.clone(),
             highlighter: Highlighter::new(mode, version),
@@ -275,9 +291,7 @@ impl Editor {
             last_lsp_version: version,
             tabs: vec![TabState {
                 buffer: None,
-                top: 0,
-                top_offset: 0,
-                left: 0,
+                windows: WindowSet::single(view),
                 lsp: None,
                 diagnostics: Vec::new(),
                 last_lsp_version: version,
@@ -306,11 +320,51 @@ impl Editor {
 
     // ------------------------------------------------------------- helpers
 
+    fn apply_view_settings(view: &mut View, settings: &Settings) {
+        view.tab_width = settings.tab_width;
+        view.line_numbers = settings.line_numbers;
+        view.highlight_trailing_ws = settings.highlight_trailing_ws;
+        view.truncate_lines = settings.truncate_lines;
+    }
+
     fn apply_settings(&mut self) {
-        self.view.tab_width = self.settings.tab_width;
-        self.view.line_numbers = self.settings.line_numbers;
-        self.view.highlight_trailing_ws = self.settings.highlight_trailing_ws;
-        self.view.truncate_lines = self.settings.truncate_lines;
+        Self::apply_view_settings(&mut self.view, &self.settings);
+        for view in self.windows.views_mut() {
+            Self::apply_view_settings(view, &self.settings);
+        }
+    }
+
+    fn new_view(settings: &Settings) -> View {
+        View {
+            line_numbers: settings.line_numbers,
+            tab_width: settings.tab_width,
+            highlight_trailing_ws: settings.highlight_trailing_ws,
+            truncate_lines: settings.truncate_lines,
+            ..View::default()
+        }
+    }
+
+    /// Copy the live active view back into the window set. The active view is
+    /// the source of truth while the editor handles input.
+    pub(crate) fn sync_active_view(&mut self) {
+        let active = self.windows.active();
+        self.windows.views_mut()[active] = self.view;
+    }
+
+    fn load_active_view(&mut self) {
+        self.view = *self.windows.active_view();
+        Self::apply_view_settings(&mut self.view, &self.settings);
+    }
+
+    /// Push settings into every pane after a display option changes.
+    fn refresh_views(&mut self) {
+        self.sync_active_view();
+        self.apply_settings();
+        self.load_active_view();
+    }
+
+    fn is_split(&self) -> bool {
+        self.windows.len() > 1
     }
 
     pub fn sync_highlighter(&mut self) {
@@ -349,6 +403,82 @@ impl Editor {
         self.exit_code = code;
     }
 
+    // ------------------------------------------------------------- windows
+
+    fn split_window(&mut self, dir: SplitDir) {
+        self.sync_active_view();
+        let (width, height) = (self.view.width, self.view.height);
+        let (min_width, min_height) = match dir {
+            SplitDir::AboveBelow => (10, 6),
+            SplitDir::LeftRight => (24, 4),
+        };
+        if width < min_width || height < min_height {
+            self.message = "Window too small to split".into();
+            return;
+        }
+        if !self.windows.split(dir) {
+            self.message = format!("Cannot split: at most {MAX_WINDOWS} windows");
+            return;
+        }
+        // Split panes own their whole rectangle; the frame keeps the mode
+        // line, echo area, menus, and tab bar.
+        for view in self.windows.views_mut() {
+            view.chrome_rows = 0;
+        }
+        self.load_active_view();
+        self.needs_redraw = true;
+        self.message = format!("{} windows", self.windows.len());
+    }
+
+    fn other_window(&mut self) {
+        self.sync_active_view();
+        if !self.windows.other() {
+            self.message = "Only one window".into();
+            return;
+        }
+        self.load_active_view();
+        self.view.ensure_visible(&self.buffer);
+        self.needs_redraw = true;
+        self.message = format!(
+            "Window {}/{}",
+            self.windows.active() + 1,
+            self.windows.len()
+        );
+    }
+
+    fn delete_window(&mut self) {
+        self.sync_active_view();
+        if !self.windows.delete_active() {
+            self.message = "Only one window".into();
+            return;
+        }
+        self.load_active_view();
+        if !self.is_split() {
+            for view in self.windows.views_mut() {
+                view.chrome_rows = 2;
+            }
+            self.load_active_view();
+        }
+        self.view.ensure_visible(&self.buffer);
+        self.needs_redraw = true;
+        self.message = format!("{} windows", self.windows.len());
+    }
+
+    fn delete_other_windows(&mut self) {
+        self.sync_active_view();
+        if !self.windows.delete_others() {
+            self.message = "Only one window".into();
+            return;
+        }
+        for view in self.windows.views_mut() {
+            view.chrome_rows = 2;
+        }
+        self.load_active_view();
+        self.view.ensure_visible(&self.buffer);
+        self.needs_redraw = true;
+        self.message = "One window".into();
+    }
+
     fn set_buffer(&mut self, buffer: Buffer) {
         let first_line: String = buffer
             .lines
@@ -360,9 +490,13 @@ impl Editor {
         self.highlighter = Highlighter::new(self.mode, buffer.version);
         self.buffer = buffer;
         self.apply_settings();
-        self.view.top = 0;
-        self.view.top_offset = 0;
-        self.view.left = 0;
+        self.sync_active_view();
+        for view in self.windows.views_mut() {
+            view.top = 0;
+            view.top_offset = 0;
+            view.left = 0;
+        }
+        self.load_active_view();
         self.search = None;
         self.editor_completion = None;
         self.word_cache = None;
@@ -413,12 +547,11 @@ impl Editor {
     }
 
     fn stash_active_tab(&mut self) {
+        self.sync_active_view();
         let active = self.active_tab;
         let tab = &mut self.tabs[active];
         tab.buffer = Some(std::mem::take(&mut self.buffer));
-        tab.top = self.view.top;
-        tab.top_offset = self.view.top_offset;
-        tab.left = self.view.left;
+        tab.windows = std::mem::take(&mut self.windows);
         tab.lsp = self.lsp.take();
         tab.diagnostics = std::mem::take(&mut self.diagnostics);
         tab.last_lsp_version = self.last_lsp_version;
@@ -430,13 +563,11 @@ impl Editor {
     /// Load `active_tab`, whose saved buffer must be present.
     fn load_active_tab(&mut self) {
         let active = self.active_tab;
-        let (buffer, top, top_offset, left, lsp, diagnostics, last_version, settings, mode, spell) = {
+        let (buffer, windows, lsp, diagnostics, last_version, settings, mode, spell) = {
             let tab = &mut self.tabs[active];
             (
                 tab.buffer.take().expect("active tab has no buffer"),
-                tab.top,
-                tab.top_offset,
-                tab.left,
+                std::mem::take(&mut tab.windows),
                 tab.lsp.take(),
                 std::mem::take(&mut tab.diagnostics),
                 tab.last_lsp_version,
@@ -448,9 +579,8 @@ impl Editor {
         self.buffer = buffer;
         self.mode = mode;
         self.settings = settings;
-        self.view.top = top;
-        self.view.top_offset = top_offset;
-        self.view.left = left;
+        self.windows = windows;
+        self.view = *self.windows.active_view();
         self.highlighter = Highlighter::new(mode, self.buffer.version);
         self.apply_settings();
         self.lsp = lsp;
@@ -499,12 +629,11 @@ impl Editor {
         let version = buffer.version;
         let mode = Lang::Plain;
         let settings = self.config.settings_for(mode);
+        let windows = WindowSet::single(Self::new_view(&settings));
         self.stash_active_tab();
         self.tabs.push(TabState {
             buffer: Some(buffer),
-            top: 0,
-            top_offset: 0,
-            left: 0,
+            windows,
             lsp: None,
             diagnostics: Vec::new(),
             last_lsp_version: version,
@@ -569,12 +698,11 @@ impl Editor {
                 .unwrap_or_default();
             let mode = Lang::detect(buffer.path.as_deref(), Some(&first_line));
             let settings = self.config.settings_for(mode);
+            let windows = WindowSet::single(Self::new_view(&settings));
             self.stash_active_tab();
             self.tabs.push(TabState {
                 buffer: Some(buffer),
-                top: 0,
-                top_offset: 0,
-                left: 0,
+                windows,
                 lsp: None,
                 diagnostics: Vec::new(),
                 last_lsp_version: version,
@@ -1456,6 +1584,15 @@ impl Editor {
                     self.prefix = Some(Prefix::CxT);
                     self.message = "C-x t-".into();
                 }
+                KeyCode::Char('2') if !key.ctrl && !key.alt => {
+                    self.split_window(SplitDir::AboveBelow)
+                }
+                KeyCode::Char('3') if !key.ctrl && !key.alt => {
+                    self.split_window(SplitDir::LeftRight)
+                }
+                KeyCode::Char('o') if !key.ctrl && !key.alt => self.other_window(),
+                KeyCode::Char('0') if !key.ctrl && !key.alt => self.delete_window(),
+                KeyCode::Char('1') if !key.ctrl && !key.alt => self.delete_other_windows(),
                 KeyCode::Char('s') => self.save_buffer(),
                 _ => self.message = format!("C-x {} is unbound", key.display()),
             },
@@ -2577,7 +2714,7 @@ impl Editor {
             Cmd::GotoLine => self.prompt_goto_line(),
             Cmd::ToggleLineNumbers => {
                 self.settings.line_numbers = !self.settings.line_numbers;
-                self.view.line_numbers = self.settings.line_numbers;
+                self.refresh_views();
                 self.message = format!(
                     "Line numbers {}",
                     if self.settings.line_numbers {
@@ -2589,7 +2726,7 @@ impl Editor {
             }
             Cmd::ToggleTrailingWs => {
                 self.settings.highlight_trailing_ws = !self.settings.highlight_trailing_ws;
-                self.view.highlight_trailing_ws = self.settings.highlight_trailing_ws;
+                self.refresh_views();
                 self.message = format!(
                     "Trailing whitespace highlight {}",
                     if self.settings.highlight_trailing_ws {
@@ -2608,7 +2745,11 @@ impl Editor {
             }
             Cmd::ToggleTruncateLines => {
                 self.settings.truncate_lines = !self.settings.truncate_lines;
-                self.view.truncate_lines = self.settings.truncate_lines;
+                self.refresh_views();
+                for view in self.windows.views_mut() {
+                    view.left = 0;
+                    view.top_offset = 0;
+                }
                 self.view.left = 0;
                 self.view.top_offset = 0;
                 self.needs_redraw = true;
@@ -2690,6 +2831,11 @@ impl Editor {
             Cmd::SearchBackward => self.start_search(-1),
             Cmd::Beginning => self.buffer.move_buffer_start(),
             Cmd::End => self.buffer.move_buffer_end(),
+            Cmd::SplitWindowBelow => self.split_window(SplitDir::AboveBelow),
+            Cmd::SplitWindowRight => self.split_window(SplitDir::LeftRight),
+            Cmd::OtherWindow => self.other_window(),
+            Cmd::DeleteWindow => self.delete_window(),
+            Cmd::DeleteOtherWindows => self.delete_other_windows(),
         }
     }
 
@@ -2738,7 +2884,16 @@ impl Editor {
     }
 
     fn handle_overlay(&mut self, key: Key) {
-        let body = self.view.body_height();
+        let tab_rows = if self.tab_count() > 1 && self.terminal_height >= 4 {
+            1
+        } else {
+            0
+        };
+        let body = self
+            .terminal_height
+            .saturating_sub(2)
+            .saturating_sub(tab_rows)
+            .max(1);
         let max = help::HELP.len().saturating_sub(body);
         let Some(mut overlay) = self.overlay else {
             return;
@@ -3768,6 +3923,68 @@ mod tests {
         ed.close_tab();
         assert!(ed.should_quit);
         fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn splits_windows_and_switches_between_them() {
+        let mut ed = editor("one\ntwo\nthree\n");
+        ed.handle_key(Key::ctrl('x'));
+        ed.handle_key(Key::ch('2'));
+        assert_eq!(ed.windows.len(), 2);
+        assert_eq!(ed.windows.active(), 0);
+        assert!(ed.message.contains("2 windows"));
+
+        ed.handle_key(Key::ctrl('x'));
+        ed.handle_key(Key::ch('o'));
+        assert_eq!(ed.windows.active(), 1);
+
+        ed.handle_key(Key::ctrl('x'));
+        ed.handle_key(Key::ch('3'));
+        assert_eq!(ed.windows.len(), 3);
+
+        ed.handle_key(Key::ctrl('x'));
+        ed.handle_key(Key::ch('1'));
+        assert_eq!(ed.windows.len(), 1);
+        assert_eq!(ed.windows.active(), 0);
+    }
+
+    #[test]
+    fn window_layouts_are_kept_per_tab() {
+        let mut ed = editor("one\n");
+        ed.handle_key(Key::ctrl('x'));
+        ed.handle_key(Key::ch('3'));
+        assert_eq!(ed.windows.len(), 2);
+
+        ed.new_tab();
+        assert_eq!(ed.windows.len(), 1);
+
+        ed.switch_tab(-1);
+        assert_eq!(ed.windows.len(), 2);
+    }
+
+    #[test]
+    fn window_commands_are_available_through_mx() {
+        let mut ed = editor("one\n");
+        ed.run_mx("split-window-right");
+        assert_eq!(ed.windows.len(), 2);
+        ed.run_mx("other-window");
+        assert_eq!(ed.windows.active(), 1);
+        ed.run_mx("delete-window");
+        assert_eq!(ed.windows.len(), 1);
+        ed.run_mx("split-window-below");
+        ed.run_mx("delete-other-windows");
+        assert_eq!(ed.windows.len(), 1);
+    }
+
+    #[test]
+    fn splitting_refuses_a_too_small_window() {
+        let mut ed = editor("one\n");
+        ed.view.width = 8;
+        ed.view.height = 4;
+        ed.handle_key(Key::ctrl('x'));
+        ed.handle_key(Key::ch('2'));
+        assert_eq!(ed.windows.len(), 1);
+        assert!(ed.message.contains("too small"));
     }
 
     #[test]

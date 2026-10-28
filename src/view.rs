@@ -151,6 +151,7 @@ pub fn gutter_width(line_count: usize, enabled: bool) -> usize {
     digits + 2
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct View {
     pub width: usize,
     pub height: usize,
@@ -168,6 +169,10 @@ pub struct View {
     pub menu_rows: usize,
     /// Rows used by the tab bar at the top of the screen.
     pub tab_rows: usize,
+    /// Rows owned by the frame rather than this view (the mode line and echo
+    /// area). Split panes set this to zero because their height already
+    /// excludes the frame rows.
+    pub chrome_rows: usize,
 }
 
 impl Default for View {
@@ -184,19 +189,34 @@ impl Default for View {
             truncate_lines: true,
             menu_rows: 0,
             tab_rows: 0,
+            chrome_rows: 2,
         }
     }
 }
 
 impl View {
+    /// A view for one pane of a split screen. The pane's height already
+    /// excludes the tab bar, mode line, echo area, and menus.
+    pub fn pane() -> Self {
+        Self {
+            chrome_rows: 0,
+            ..Self::default()
+        }
+    }
+
     /// Rows available for text (the last two rows are the mode line and echo
     /// area; completion menus reserve rows above them).
     pub fn body_height(&self) -> usize {
         self.height
-            .saturating_sub(2)
+            .saturating_sub(self.chrome_rows)
             .saturating_sub(self.menu_rows)
             .saturating_sub(self.tab_rows)
             .max(1)
+    }
+
+    /// Keep the viewport inside the buffer after switching buffers or tabs.
+    pub fn clamp(&mut self, buffer: &Buffer) {
+        self.top = self.top.min(buffer.line_count().saturating_sub(1));
     }
 
     pub fn gutter(&self, line_count: usize) -> usize {
