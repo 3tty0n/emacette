@@ -2,10 +2,10 @@
 
 Part of the [emacette user guide](README.md).
 
-The screen can be split into several panes. All panes show the active
-buffer: text edits and point are shared, but each pane keeps its own scroll
-position. This is useful for keeping a function definition visible while
-editing somewhere else, or for viewing two distant parts of a file.
+The screen can be split into several panes. Each pane shows a buffer and keeps
+its own cursor and scroll position. Panes showing the same buffer share the
+text and edits, so you can keep a function definition visible while editing
+elsewhere; panes can also show different files.
 
 ## Keys
 
@@ -21,21 +21,24 @@ The same commands are available through `M-x` as `split-window-below`,
 
 ## Behaviour
 
-- The active pane has the cursor; the mode line position and echo area refer
-  to it.
+- The active pane has the cursor and its buffer is shown in the mode line; the
+  other panes keep their own cursors for when you switch to them.
 - Splitting the active pane nests inside it, so layouts can mix horizontal and
   vertical splits.
-- Each pane scrolls independently. Moving point in one pane does not scroll
-  the others.
-- Window layouts belong to a tab. Switching tabs restores that tab's layout
-  and scroll positions. See [Tabs](tabs.md).
-- Up to eight panes can be open. Splitting is refused when the pane is too
-  small to show both halves usefully.
+- Each pane scrolls and moves point independently. Editing a buffer updates
+  every pane showing that buffer.
+- `C-x C-f` opens a file in the active pane. It does not create a tab, and the
+  previous buffer stays available by reopening the file.
+- If a file is already open, `C-x C-f` shows its buffer in the active pane
+  instead of opening a second copy.
+- Window layouts belong to tabs. Switching tabs restores that tab's splits and
+  buffers. See [Tabs](tabs.md).
+- Up to eight panes can be open per tab. Splitting is refused when the pane is
+  too small to show both halves usefully.
 - `C-x o` cycles through panes in layout order.
 - The completion popup stays inside the active pane.
 
 ## Limitations
 
-- All panes show the same buffer; opening a different file uses a tab.
 - Panes are split evenly. There is no command to resize a split or move a pane.
 - The mode line and echo area are shared by the whole frame.

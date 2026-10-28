@@ -288,75 +288,45 @@ fn child_rects(rect: Rect, dir: SplitDir) -> (Rect, Rect) {
     }
 }
 
-fn assign_window_rects(
-    editor: &mut Editor,
-    node: &Layout,
-    rect: Rect,
-    active: usize,
-    active_rect: &mut Rect,
-) {
+fn collect_layout(node: &Layout, rect: Rect, out: &mut Vec<(usize, Rect)>) {
     match node {
-        Layout::Leaf(id) => {
-            let mut view = editor.windows.views()[*id];
-            view.width = rect.width;
-            view.height = rect.height;
-            view.menu_rows = 0;
-            view.tab_rows = 0;
-            view.chrome_rows = 0;
-            view.tab_width = editor.settings.tab_width;
-            view.line_numbers = editor.settings.line_numbers;
-            view.highlight_trailing_ws = editor.settings.highlight_trailing_ws;
-            view.truncate_lines = editor.settings.truncate_lines;
-            if *id == active {
-                view.ensure_visible(&editor.buffer);
-                *active_rect = rect;
-                editor.view = view;
-            } else {
-                view.clamp(&editor.buffer);
-            }
-            editor.windows.views_mut()[*id] = view;
-        }
+        Layout::Leaf(id) => out.push((*id, rect)),
         Layout::Split { dir, first, second } => {
             let (first_rect, second_rect) = child_rects(rect, *dir);
-            assign_window_rects(editor, first, first_rect, active, active_rect);
-            assign_window_rects(editor, second, second_rect, active, active_rect);
+            collect_layout(first, first_rect, out);
+            collect_layout(second, second_rect, out);
         }
     }
 }
 
-fn render_layout(
-    editor: &mut Editor,
+fn compose_layout(
     node: &Layout,
     rect: Rect,
-    active: usize,
-    popup: Option<&CompletionPopup>,
+    rendered: &[Vec<String>],
+    theme: &Theme,
 ) -> Vec<String> {
-    if rect.width == 0 || rect.height == 0 {
+    if rect.height == 0 {
+        return Vec::new();
+    }
+    if rect.width == 0 {
         return vec![String::new(); rect.height];
     }
     match node {
-        Layout::Leaf(id) => {
-            editor.view = editor.windows.views()[*id];
-            let popup = if *id == active { popup } else { None };
-            let rows = build_text_rows(editor, rect.height, popup);
-            let rows = rows
-                .into_iter()
-                .map(|row| pad_row(row, rect.width))
-                .collect();
-            editor.windows.views_mut()[*id] = editor.view;
-            rows
-        }
+        Layout::Leaf(id) => rendered
+            .get(*id)
+            .cloned()
+            .unwrap_or_else(|| vec![String::new(); rect.height]),
         Layout::Split { dir, first, second } => {
             let (first_rect, second_rect) = child_rects(rect, *dir);
-            let mut first_rows = render_layout(editor, first, first_rect, active, popup);
-            let second_rows = render_layout(editor, second, second_rect, active, popup);
+            let mut first_rows = compose_layout(first, first_rect, rendered, theme);
+            let second_rows = compose_layout(second, second_rect, rendered, theme);
             match dir {
                 SplitDir::AboveBelow => {
-                    first_rows.push(separator_row(rect.width, &editor.theme));
+                    first_rows.push(separator_row(rect.width, theme));
                     first_rows.extend(second_rows);
                 }
                 SplitDir::LeftRight => {
-                    let separator = separator_col(&editor.theme);
+                    let separator = separator_col(theme);
                     first_rows = first_rows
                         .into_iter()
                         .zip(second_rows)
@@ -369,6 +339,35 @@ fn render_layout(
     }
 }
 
+/// Render one window using the tab state currently loaded in `editor`.
+fn render_window_rows(
+    editor: &mut Editor,
+    id: usize,
+    rect: Rect,
+    popup: Option<&CompletionPopup>,
+) -> Vec<String> {
+    if rect.width == 0 || rect.height == 0 {
+        return vec![String::new(); rect.height];
+    }
+    let mut view = editor.windows.window(id).view;
+    view.width = rect.width;
+    view.height = rect.height;
+    view.menu_rows = 0;
+    view.tab_rows = 0;
+    view.chrome_rows = 0;
+    Editor::apply_view_settings(&mut view, &editor.settings);
+    view.clamp(&editor.buffer);
+    editor.view = view;
+    editor.buffer.point = view.point;
+    let rows = build_text_rows(editor, rect.height, popup);
+    let rows = rows
+        .into_iter()
+        .map(|row| pad_row(row, rect.width))
+        .collect();
+    editor.windows.window_mut(id).view = editor.view;
+    rows
+}
+
 fn render_split(
     editor: &mut Editor,
     body_rows: usize,
@@ -377,19 +376,38 @@ fn render_split(
     editor.sync_active_view();
     let layout = editor.windows.layout().clone();
     let active = editor.windows.active();
+    let active_buffer = editor.active_buffer;
     let root = Rect {
         x: 0,
         y: 0,
         width,
         height: body_rows,
     };
-    let mut active_rect = root;
-    assign_window_rects(editor, &layout, root, active, &mut active_rect);
+    let mut plan = Vec::new();
+    collect_layout(&layout, root, &mut plan);
+    let active_rect = plan
+        .iter()
+        .find(|(id, _)| *id == active)
+        .map(|(_, rect)| *rect)
+        .unwrap_or(root);
 
-    editor.view = *editor.windows.active_view();
-    editor.view.ensure_visible(&editor.buffer);
-    editor.windows.views_mut()[active] = editor.view;
-
+    // Give the active window its real dimensions before computing the
+    // cursor and the completion popup.
+    {
+        let mut view = editor.windows.window(active).view;
+        view.width = active_rect.width;
+        view.height = active_rect.height;
+        view.menu_rows = 0;
+        view.tab_rows = 0;
+        view.chrome_rows = 0;
+        Editor::apply_view_settings(&mut view, &editor.settings);
+        editor.view = view;
+        editor.buffer.point = editor.view.point;
+        editor.view.clamp(&editor.buffer);
+        editor.view.ensure_visible(&editor.buffer);
+        editor.windows.window_mut(active).view = editor.view;
+    }
+    let active_point = editor.view.point;
     let active_cursor = buffer_cursor(editor);
     let gutter = editor.view.gutter(editor.buffer.line_count());
     let popup = if editor.minibuffer.is_none() {
@@ -398,8 +416,67 @@ fn render_split(
         None
     };
 
-    let rows = render_layout(editor, &layout, root, active, popup.as_ref());
-    editor.view = *editor.windows.active_view();
+    let has_inactive_buffers = plan
+        .iter()
+        .any(|(id, _)| editor.windows.window(*id).buffer != active_buffer);
+    let mut rendered: Vec<Vec<String>> = vec![Vec::new(); editor.windows.len()];
+
+    // Windows showing the active buffer share the live state.
+    for (id, rect) in &plan {
+        if editor.windows.window(*id).buffer == active_buffer {
+            rendered[*id] = render_window_rows(
+                editor,
+                *id,
+                *rect,
+                if *id == active { popup.as_ref() } else { None },
+            );
+        }
+    }
+    editor.buffer.point = active_point;
+    editor.view = editor.windows.window(active).view;
+
+    if has_inactive_buffers {
+        editor.sync_active_view();
+        editor.buffer.point = active_point;
+        let search = editor.search.take();
+        let completion = editor.editor_completion.take();
+        let lsp_completion = editor.lsp_completion.take();
+        editor.stash_buffer_state(active_buffer);
+
+        let mut buffers: Vec<usize> = plan
+            .iter()
+            .map(|(id, _)| editor.windows.window(*id).buffer)
+            .filter(|buffer| *buffer != active_buffer)
+            .collect();
+        buffers.sort_unstable();
+        buffers.dedup();
+        for buffer in buffers {
+            editor.load_buffer_state(buffer);
+            editor.search = None;
+            editor.editor_completion = None;
+            let saved_point = editor.buffer.point;
+            for (id, rect) in &plan {
+                if editor.windows.window(*id).buffer == buffer {
+                    rendered[*id] = render_window_rows(editor, *id, *rect, None);
+                }
+            }
+            editor.buffer.point = saved_point;
+            editor.stash_buffer_state(buffer);
+        }
+
+        editor.load_buffer_state(active_buffer);
+        editor.search = search;
+        editor.editor_completion = completion;
+        editor.lsp_completion = lsp_completion;
+        editor.buffer.point = active_point;
+        editor.view = editor.windows.window(active).view;
+        editor.view.clamp(&editor.buffer);
+        editor.view.ensure_visible(&editor.buffer);
+        Editor::apply_view_settings(&mut editor.view, &editor.settings);
+        editor.windows.window_mut(active).view = editor.view;
+    }
+
+    let rows = compose_layout(&layout, root, &rendered, &editor.theme);
     let cursor = active_cursor
         .filter(|(_, y)| active_rect.height > 0 && *y as usize <= active_rect.height)
         .map(|(x, y)| (active_rect.x as u16 + x, active_rect.y as u16 + y));
@@ -1691,6 +1768,34 @@ mod tests {
         ed.handle_key(Key::ch('o'));
         let frame = render(&mut ed, 40, 12);
         assert_eq!(frame.cursor.map(|(_, y)| y), Some(6));
+    }
+
+    #[test]
+    fn split_windows_can_show_different_files() {
+        let (dir, _) = temp_dictionary("hello\n");
+        let first = dir.join("first.txt");
+        let second = dir.join("second.txt");
+        std::fs::write(&first, "first-content\n").unwrap();
+        std::fs::write(&second, "second-content\n").unwrap();
+        let mut ed = Editor::open(Some(first), Config::default()).unwrap();
+        ed.handle_key(Key::ctrl('x'));
+        ed.handle_key(Key::ch('3'));
+        ed.handle_key(Key::ctrl('x'));
+        ed.handle_key(Key::ctrl('f'));
+        ed.handle_key(Key::ctrl('a'));
+        ed.handle_key(Key::ctrl('k'));
+        for c in second.to_string_lossy().chars() {
+            ed.handle_key(Key::ch(c));
+        }
+        ed.handle_key(Key::code(KeyCode::Enter));
+        let frame = render(&mut ed, 70, 12);
+        let plain = strip_ansi(&frame.output);
+        assert!(plain.contains("first-content"), "{plain:?}");
+        assert!(plain.contains("second-content"), "{plain:?}");
+        assert_eq!(ed.tab_count(), 1);
+        let (x, _) = frame.cursor.expect("cursor should be visible");
+        assert!(x < 35);
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

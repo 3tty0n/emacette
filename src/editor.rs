@@ -3,7 +3,7 @@
 
 use std::fs;
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::buffer::{Buffer, CaseOp, Coalesce, KillRing, Point};
 use crate::completion::{self, EditorCompletion};
@@ -138,6 +138,7 @@ enum Prefix {
 enum ConfirmKind {
     QuitSave,
     QuitSaveUnnamed,
+    QuitUnsavedBuffers,
     AbortCommit,
     EmptyCommit,
 }
@@ -160,9 +161,8 @@ struct ParenCache {
     next_row: usize,
 }
 
-struct TabState {
+struct BufferSlot {
     buffer: Option<Buffer>,
-    windows: WindowSet,
     lsp: Option<LspClient>,
     diagnostics: Vec<Diagnostic>,
     last_lsp_version: u64,
@@ -171,8 +171,13 @@ struct TabState {
     spell: SpellState,
 }
 
+struct Tab {
+    /// `None` for the active tab, whose window set lives on `Editor`.
+    windows: Option<WindowSet>,
+}
+
 #[derive(Clone, Debug)]
-struct LspCompletionContext {
+pub(crate) struct LspCompletionContext {
     request_id: i64,
     start: Point,
     end: Point,
@@ -198,10 +203,12 @@ pub struct Editor {
     word_cache: Option<(u64, Vec<String>)>,
     pub lsp: Option<LspClient>,
     pub diagnostics: Vec<Diagnostic>,
-    lsp_completion: Option<LspCompletionContext>,
+    pub(crate) lsp_completion: Option<LspCompletionContext>,
     last_lsp_version: u64,
-    tabs: Vec<TabState>,
-    active_tab: usize,
+    buffers: Vec<BufferSlot>,
+    pub(crate) active_buffer: usize,
+    tabs: Vec<Tab>,
+    pub(crate) active_tab: usize,
     paren_cache: Option<ParenCache>,
     confirm: Option<Confirm>,
     pub overlay: Option<Overlay>,
@@ -289,9 +296,8 @@ impl Editor {
             diagnostics: Vec::new(),
             lsp_completion: None,
             last_lsp_version: version,
-            tabs: vec![TabState {
+            buffers: vec![BufferSlot {
                 buffer: None,
-                windows: WindowSet::single(view),
                 lsp: None,
                 diagnostics: Vec::new(),
                 last_lsp_version: version,
@@ -299,6 +305,8 @@ impl Editor {
                 mode,
                 spell: SpellState::default(),
             }],
+            active_buffer: 0,
+            tabs: vec![Tab { windows: None }],
             active_tab: 0,
             paren_cache: None,
             confirm: None,
@@ -320,7 +328,7 @@ impl Editor {
 
     // ------------------------------------------------------------- helpers
 
-    fn apply_view_settings(view: &mut View, settings: &Settings) {
+    pub(crate) fn apply_view_settings(view: &mut View, settings: &Settings) {
         view.tab_width = settings.tab_width;
         view.line_numbers = settings.line_numbers;
         view.highlight_trailing_ws = settings.highlight_trailing_ws;
@@ -329,30 +337,27 @@ impl Editor {
 
     fn apply_settings(&mut self) {
         Self::apply_view_settings(&mut self.view, &self.settings);
-        for view in self.windows.views_mut() {
-            Self::apply_view_settings(view, &self.settings);
+        self.sync_active_view();
+        let buffer = self.active_buffer;
+        for window in self.windows.windows_mut() {
+            if window.buffer == buffer {
+                Self::apply_view_settings(&mut window.view, &self.settings);
+            }
         }
-    }
-
-    fn new_view(settings: &Settings) -> View {
-        View {
-            line_numbers: settings.line_numbers,
-            tab_width: settings.tab_width,
-            highlight_trailing_ws: settings.highlight_trailing_ws,
-            truncate_lines: settings.truncate_lines,
-            ..View::default()
-        }
+        self.load_active_view();
     }
 
     /// Copy the live active view back into the window set. The active view is
     /// the source of truth while the editor handles input.
     pub(crate) fn sync_active_view(&mut self) {
+        self.view.point = self.buffer.point;
         let active = self.windows.active();
-        self.windows.views_mut()[active] = self.view;
+        self.windows.window_mut(active).view = self.view;
     }
 
     fn load_active_view(&mut self) {
-        self.view = *self.windows.active_view();
+        self.view = self.windows.active_window().view;
+        self.buffer.point = self.view.point;
         Self::apply_view_settings(&mut self.view, &self.settings);
     }
 
@@ -422,12 +427,41 @@ impl Editor {
         }
         // Split panes own their whole rectangle; the frame keeps the mode
         // line, echo area, menus, and tab bar.
-        for view in self.windows.views_mut() {
-            view.chrome_rows = 0;
+        for window in self.windows.windows_mut() {
+            window.view.chrome_rows = 0;
         }
         self.load_active_view();
+        self.view.ensure_visible(&self.buffer);
+        self.sync_active_view();
         self.needs_redraw = true;
         self.message = format!("{} windows", self.windows.len());
+    }
+
+    /// Load the buffer and view of the currently selected window.
+    fn focus_active_window(&mut self) {
+        let target_buffer = self.windows.active_window().buffer;
+        if target_buffer != self.active_buffer && target_buffer < self.buffers.len() {
+            // The active view was synced before the selected window changed;
+            // stash without writing the old view into the new window.
+            self.buffer.point = self.view.point;
+            self.stash_buffer_state(self.active_buffer);
+            self.active_buffer = target_buffer;
+            self.load_buffer_state(self.active_buffer);
+            self.search = None;
+            self.editor_completion = None;
+            self.view = self.windows.active_window().view;
+            self.buffer.point = self.view.point;
+            self.view.clamp(&self.buffer);
+            self.view.ensure_visible(&self.buffer);
+            Self::apply_view_settings(&mut self.view, &self.settings);
+            self.sync_active_view();
+        } else {
+            self.load_active_view();
+            self.view.clamp(&self.buffer);
+            self.view.ensure_visible(&self.buffer);
+            self.sync_active_view();
+        }
+        self.needs_redraw = true;
     }
 
     fn other_window(&mut self) {
@@ -436,9 +470,7 @@ impl Editor {
             self.message = "Only one window".into();
             return;
         }
-        self.load_active_view();
-        self.view.ensure_visible(&self.buffer);
-        self.needs_redraw = true;
+        self.focus_active_window();
         self.message = format!(
             "Window {}/{}",
             self.windows.active() + 1,
@@ -452,15 +484,12 @@ impl Editor {
             self.message = "Only one window".into();
             return;
         }
-        self.load_active_view();
         if !self.is_split() {
-            for view in self.windows.views_mut() {
-                view.chrome_rows = 2;
+            for window in self.windows.windows_mut() {
+                window.view.chrome_rows = 2;
             }
-            self.load_active_view();
         }
-        self.view.ensure_visible(&self.buffer);
-        self.needs_redraw = true;
+        self.focus_active_window();
         self.message = format!("{} windows", self.windows.len());
     }
 
@@ -470,12 +499,10 @@ impl Editor {
             self.message = "Only one window".into();
             return;
         }
-        for view in self.windows.views_mut() {
-            view.chrome_rows = 2;
+        for window in self.windows.windows_mut() {
+            window.view.chrome_rows = 2;
         }
-        self.load_active_view();
-        self.view.ensure_visible(&self.buffer);
-        self.needs_redraw = true;
+        self.focus_active_window();
         self.message = "One window".into();
     }
 
@@ -489,14 +516,18 @@ impl Editor {
         self.settings = self.config.settings_for(self.mode);
         self.highlighter = Highlighter::new(self.mode, buffer.version);
         self.buffer = buffer;
-        self.apply_settings();
-        self.sync_active_view();
-        for view in self.windows.views_mut() {
-            view.top = 0;
-            view.top_offset = 0;
-            view.left = 0;
+        let active = self.active_buffer;
+        for window in self.windows.windows_mut() {
+            if window.buffer == active {
+                Self::apply_view_settings(&mut window.view, &self.settings);
+                window.view.top = 0;
+                window.view.top_offset = 0;
+                window.view.left = 0;
+                window.view.point = self.buffer.point;
+            }
         }
-        self.load_active_view();
+        self.view = self.windows.active_window().view;
+        self.buffer.point = self.view.point;
         self.search = None;
         self.editor_completion = None;
         self.word_cache = None;
@@ -508,35 +539,54 @@ impl Editor {
         self.needs_redraw = true;
     }
 
-    // --------------------------------------------------------------- tabs
+    // ------------------------------------------------------- buffers / tabs
 
     pub fn tab_count(&self) -> usize {
         self.tabs.len()
     }
 
-    fn first_unsaved_other_tab(&self) -> Option<usize> {
-        self.tabs
-            .iter()
-            .enumerate()
-            .find(|(index, tab)| {
-                *index != self.active_tab
-                    && tab.buffer.as_ref().is_some_and(Buffer::has_unsaved_changes)
-            })
-            .map(|(index, _)| index)
+    fn tab_buffer(&self, tab: usize) -> usize {
+        if tab == self.active_tab {
+            self.windows.active_window().buffer
+        } else {
+            self.tabs[tab]
+                .windows
+                .as_ref()
+                .expect("inactive tab has no window set")
+                .active_window()
+                .buffer
+        }
+    }
+
+    fn buffer_display_name(&self, index: usize) -> String {
+        if index == self.active_buffer {
+            self.buffer.display_name()
+        } else {
+            self.buffers[index]
+                .buffer
+                .as_ref()
+                .map(Buffer::display_name)
+                .unwrap_or_else(|| "*scratch*".to_string())
+        }
+    }
+
+    fn buffer_modified(&self, index: usize) -> bool {
+        if index == self.active_buffer {
+            self.buffer.modified
+        } else {
+            self.buffers[index]
+                .buffer
+                .as_ref()
+                .is_some_and(|buffer| buffer.modified)
+        }
     }
 
     pub fn tab_labels(&self) -> Vec<(String, bool)> {
         (0..self.tabs.len())
             .map(|index| {
-                let buffer = if index == self.active_tab {
-                    Some(&self.buffer)
-                } else {
-                    self.tabs[index].buffer.as_ref()
-                };
-                let name = buffer
-                    .map(Buffer::display_name)
-                    .unwrap_or_else(|| "*scratch*".to_string());
-                let star = if buffer.is_some_and(|buffer| buffer.modified) {
+                let buffer = self.tab_buffer(index);
+                let name = self.buffer_display_name(buffer);
+                let star = if self.buffer_modified(buffer) {
                     "*"
                 } else {
                     ""
@@ -546,55 +596,93 @@ impl Editor {
             .collect()
     }
 
-    fn stash_active_tab(&mut self) {
-        self.sync_active_view();
-        let active = self.active_tab;
-        let tab = &mut self.tabs[active];
-        tab.buffer = Some(std::mem::take(&mut self.buffer));
-        tab.windows = std::mem::take(&mut self.windows);
-        tab.lsp = self.lsp.take();
-        tab.diagnostics = std::mem::take(&mut self.diagnostics);
-        tab.last_lsp_version = self.last_lsp_version;
-        tab.settings = self.settings.clone();
-        tab.mode = self.mode;
-        tab.spell = std::mem::take(&mut self.spell);
+    fn find_buffer_by_path(&self, path: &Path) -> Option<usize> {
+        if self.buffer.path.as_deref() == Some(path) {
+            return Some(self.active_buffer);
+        }
+        self.buffers.iter().position(|slot| {
+            slot.buffer
+                .as_ref()
+                .and_then(|buffer| buffer.path.as_deref())
+                == Some(path)
+        })
     }
 
-    /// Load `active_tab`, whose saved buffer must be present.
-    fn load_active_tab(&mut self) {
-        let active = self.active_tab;
-        let (buffer, windows, lsp, diagnostics, last_version, settings, mode, spell) = {
-            let tab = &mut self.tabs[active];
+    /// Move the live buffer state into `index`.
+    pub(crate) fn stash_buffer_state(&mut self, index: usize) {
+        let slot = &mut self.buffers[index];
+        slot.buffer = Some(std::mem::take(&mut self.buffer));
+        slot.lsp = self.lsp.take();
+        slot.diagnostics = std::mem::take(&mut self.diagnostics);
+        slot.last_lsp_version = self.last_lsp_version;
+        slot.settings = self.settings.clone();
+        slot.mode = self.mode;
+        slot.spell = std::mem::take(&mut self.spell);
+    }
+
+    /// Load the buffer state stored in `index` without touching the window
+    /// layout or transient UI state.
+    pub(crate) fn load_buffer_state(&mut self, index: usize) {
+        let (buffer, lsp, diagnostics, last_version, settings, mode, spell) = {
+            let slot = &mut self.buffers[index];
             (
-                tab.buffer.take().expect("active tab has no buffer"),
-                std::mem::take(&mut tab.windows),
-                tab.lsp.take(),
-                std::mem::take(&mut tab.diagnostics),
-                tab.last_lsp_version,
-                tab.settings.clone(),
-                tab.mode,
-                std::mem::take(&mut tab.spell),
+                slot.buffer.take().expect("buffer slot is empty"),
+                slot.lsp.take(),
+                std::mem::take(&mut slot.diagnostics),
+                slot.last_lsp_version,
+                slot.settings.clone(),
+                slot.mode,
+                std::mem::take(&mut slot.spell),
             )
         };
         self.buffer = buffer;
         self.mode = mode;
         self.settings = settings;
-        self.windows = windows;
-        self.view = *self.windows.active_view();
         self.highlighter = Highlighter::new(mode, self.buffer.version);
-        self.apply_settings();
         self.lsp = lsp;
         self.diagnostics = diagnostics;
         self.last_lsp_version = last_version;
         self.spell = spell;
         self.paren_cache = None;
-        self.lsp_completion = None;
-        self.editor_completion = None;
         self.word_cache = None;
+        self.lsp_completion = None;
+    }
+
+    /// Save the active tab's window layout and live buffer state.
+    fn stash_active_tab(&mut self) {
+        self.buffer.point = self.view.point;
+        self.sync_active_view();
+        let tab = self.active_tab;
+        self.tabs[tab].windows = Some(std::mem::take(&mut self.windows));
+        self.stash_buffer_state(self.active_buffer);
+    }
+
+    /// Load `active_tab` for interactive use.
+    fn load_active_tab(&mut self) {
+        let tab = self.active_tab;
+        self.windows = self.tabs[tab]
+            .windows
+            .take()
+            .expect("active tab has no window set");
+        self.active_buffer = self.windows.active_window().buffer;
+        self.load_buffer_state(self.active_buffer);
+        self.editor_completion = None;
         self.search = None;
         self.minibuffer = None;
         self.confirm = None;
         self.prefix = None;
+        self.view = self.windows.active_window().view;
+        self.buffer.point = self.view.point;
+        self.view.clamp(&self.buffer);
+        self.view.ensure_visible(&self.buffer);
+        let buffer = self.active_buffer;
+        for window in self.windows.windows_mut() {
+            if window.buffer == buffer {
+                Self::apply_view_settings(&mut window.view, &self.settings);
+            }
+        }
+        Self::apply_view_settings(&mut self.view, &self.settings);
+        self.sync_active_view();
         self.needs_redraw = true;
         if self.lsp.is_none() {
             self.start_lsp();
@@ -629,17 +717,25 @@ impl Editor {
         let version = buffer.version;
         let mode = Lang::Plain;
         let settings = self.config.settings_for(mode);
-        let windows = WindowSet::single(Self::new_view(&settings));
         self.stash_active_tab();
-        self.tabs.push(TabState {
+
+        self.buffers.push(BufferSlot {
             buffer: Some(buffer),
-            windows,
             lsp: None,
             diagnostics: Vec::new(),
             last_lsp_version: version,
-            settings,
+            settings: settings.clone(),
             mode,
             spell: SpellState::default(),
+        });
+        let buffer_index = self.buffers.len() - 1;
+        let mut view = View::pane();
+        Self::apply_view_settings(&mut view, &settings);
+        let mut windows = WindowSet::single(view);
+        windows.window_mut(0).buffer = buffer_index;
+        windows.window_mut(0).view.point = Point::default();
+        self.tabs.push(Tab {
+            windows: Some(windows),
         });
         self.active_tab = self.tabs.len() - 1;
         self.load_active_tab();
@@ -647,24 +743,48 @@ impl Editor {
     }
 
     fn close_tab(&mut self) {
-        if self.buffer.has_unsaved_changes() {
-            self.message = "Tab modified: save it first".into();
-            return;
-        }
         if self.tabs.len() == 1 {
-            self.finish_quit(0);
+            self.quit_request();
             return;
         }
-        let index = self.active_tab;
-        self.lsp = None;
-        self.diagnostics.clear();
-        self.lsp_completion = None;
-        self.spell = SpellState::default();
-        self.tabs.remove(index);
-        self.active_tab = index.min(self.tabs.len() - 1);
-        self.buffer = Buffer::new();
+        self.buffer.point = self.view.point;
+        self.sync_active_view();
+        self.stash_buffer_state(self.active_buffer);
+        let removed = self.active_tab;
+        self.tabs.remove(removed);
+        let new_index = removed.min(self.tabs.len() - 1);
+        self.active_tab = new_index;
         self.load_active_tab();
         self.message = "Closed tab".into();
+    }
+
+    /// Show `buffer` in the active window without touching the tab bar.
+    fn show_buffer_in_active_window(&mut self, index: usize) {
+        if index == self.active_buffer {
+            return;
+        }
+        self.buffer.point = self.view.point;
+        self.sync_active_view();
+        self.stash_buffer_state(self.active_buffer);
+        let active = self.windows.active();
+        self.windows.window_mut(active).buffer = index;
+        self.active_buffer = index;
+        self.load_buffer_state(index);
+        self.editor_completion = None;
+        self.search = None;
+        self.view = self.windows.active_window().view;
+        self.view.point = self.buffer.point;
+        self.view.clamp(&self.buffer);
+        self.view.ensure_visible(&self.buffer);
+        Self::apply_view_settings(&mut self.view, &self.settings);
+        self.sync_active_view();
+        self.needs_redraw = true;
+        if self.lsp.is_none() {
+            self.start_lsp();
+        }
+        if self.settings.spell_check && !self.spell.enabled {
+            self.configure_spell();
+        }
     }
 
     fn open_in_tab(&mut self, buffer: Buffer, new_file: bool) {
@@ -675,44 +795,49 @@ impl Editor {
                 self.message = format!("Already open: {name}");
                 return;
             }
-            if let Some(index) = self.tabs.iter().position(|tab| {
-                tab.buffer
-                    .as_ref()
-                    .and_then(|buffer| buffer.path.as_deref())
-                    == Some(path)
-            }) {
-                self.switch_to_tab(index);
-                self.message = format!("Switched to tab: {name}");
+            if let Some(index) = self.find_buffer_by_path(path) {
+                self.show_buffer_in_active_window(index);
+                self.message = format!("Showing {name} in this window");
                 return;
             }
         }
-        let reuse_scratch = self.buffer.path.is_none() && !self.buffer.has_unsaved_changes();
-        if reuse_scratch {
-            self.set_buffer(buffer);
-        } else {
-            let version = buffer.version;
-            let first_line: String = buffer
-                .lines
-                .first()
-                .map(|line| line.iter().copied().collect())
-                .unwrap_or_default();
-            let mode = Lang::detect(buffer.path.as_deref(), Some(&first_line));
-            let settings = self.config.settings_for(mode);
-            let windows = WindowSet::single(Self::new_view(&settings));
-            self.stash_active_tab();
-            self.tabs.push(TabState {
-                buffer: Some(buffer),
-                windows,
-                lsp: None,
-                diagnostics: Vec::new(),
-                last_lsp_version: version,
-                settings,
-                mode,
-                spell: SpellState::default(),
-            });
-            self.active_tab = self.tabs.len() - 1;
-            self.load_active_tab();
-        }
+
+        let version = buffer.version;
+        let first_line: String = buffer
+            .lines
+            .first()
+            .map(|line| line.iter().copied().collect())
+            .unwrap_or_default();
+        let mode = Lang::detect(buffer.path.as_deref(), Some(&first_line));
+        let settings = self.config.settings_for(mode);
+
+        self.buffer.point = self.view.point;
+        self.sync_active_view();
+        self.stash_buffer_state(self.active_buffer);
+        self.buffers.push(BufferSlot {
+            buffer: Some(buffer),
+            lsp: None,
+            diagnostics: Vec::new(),
+            last_lsp_version: version,
+            settings,
+            mode,
+            spell: SpellState::default(),
+        });
+        let buffer_index = self.buffers.len() - 1;
+        let active = self.windows.active();
+        self.windows.window_mut(active).buffer = buffer_index;
+        self.active_buffer = buffer_index;
+        self.load_buffer_state(buffer_index);
+        self.editor_completion = None;
+        self.search = None;
+        self.view = self.windows.active_window().view;
+        self.view.point = self.buffer.point;
+        self.view.clamp(&self.buffer);
+        self.view.ensure_visible(&self.buffer);
+        Self::apply_view_settings(&mut self.view, &self.settings);
+        self.sync_active_view();
+        self.needs_redraw = true;
+        self.start_lsp();
         self.message = if new_file {
             format!("(New file) {name}")
         } else {
@@ -1606,6 +1731,7 @@ impl Editor {
                 KeyCode::Char('p') if !key.alt || key.ctrl => self.switch_tab(-1),
                 KeyCode::Char('o') if !key.ctrl && !key.alt => self.switch_tab(1),
                 KeyCode::Char('2') if !key.ctrl && !key.alt => self.new_tab(),
+                KeyCode::Char('0') if !key.ctrl && !key.alt => self.close_tab(),
                 KeyCode::Char('k') if !key.ctrl && !key.alt => self.close_tab(),
                 KeyCode::Char('f') if !key.ctrl && !key.alt => self.prompt_find_file(),
                 _ => self.message = format!("C-x t {} is unbound", key.display()),
@@ -1894,14 +2020,35 @@ impl Editor {
         }
     }
 
+    fn hidden_unsaved_buffers(&self) -> usize {
+        self.buffers
+            .iter()
+            .enumerate()
+            .filter(|(index, slot)| {
+                *index != self.active_buffer
+                    && slot
+                        .buffer
+                        .as_ref()
+                        .is_some_and(Buffer::has_unsaved_changes)
+            })
+            .count()
+    }
+
     fn quit_request(&mut self) {
         if !self.config.confirm_on_quit {
             self.finish_quit(0);
             return;
         }
-        if let Some(index) = self.first_unsaved_other_tab() {
-            self.switch_to_tab(index);
-            self.message = "Other tabs have unsaved changes; save them first".into();
+        let hidden = self.hidden_unsaved_buffers();
+        if hidden > 0 {
+            self.confirm = Some(Confirm {
+                kind: ConfirmKind::QuitUnsavedBuffers,
+                question: format!(
+                    "{hidden} other {} {} unsaved changes. Quit anyway? (y/n)",
+                    if hidden == 1 { "buffer" } else { "buffers" },
+                    if hidden == 1 { "has" } else { "have" },
+                ),
+            });
             return;
         }
         if !self.buffer.has_unsaved_changes() {
@@ -1949,6 +2096,13 @@ impl Editor {
                     self.prompt_write_file(true);
                 } else if no {
                     self.finish_quit(0);
+                }
+            }
+            ConfirmKind::QuitUnsavedBuffers => {
+                if yes {
+                    self.finish_quit(0);
+                } else {
+                    self.message = "Quit canceled".into();
                 }
             }
             ConfirmKind::AbortCommit => {
@@ -2746,9 +2900,12 @@ impl Editor {
             Cmd::ToggleTruncateLines => {
                 self.settings.truncate_lines = !self.settings.truncate_lines;
                 self.refresh_views();
-                for view in self.windows.views_mut() {
-                    view.left = 0;
-                    view.top_offset = 0;
+                let buffer = self.active_buffer;
+                for window in self.windows.windows_mut() {
+                    if window.buffer == buffer {
+                        window.view.left = 0;
+                        window.view.top_offset = 0;
+                    }
                 }
                 self.view.left = 0;
                 self.view.top_offset = 0;
@@ -3893,7 +4050,7 @@ mod tests {
     }
 
     #[test]
-    fn tabs_open_switch_and_close() {
+    fn find_file_does_not_create_a_tab() {
         let dir = temp_dir();
         let first = dir.join("first.txt");
         let second = dir.join("second.txt");
@@ -3905,24 +4062,50 @@ mod tests {
         assert_eq!(ed.buffer_text(), "first\n");
 
         ed.open_file(second);
-        assert_eq!(ed.tab_count(), 2);
+        assert_eq!(ed.tab_count(), 1);
         assert_eq!(ed.buffer_text(), "second\n");
+        assert_eq!(ed.buffers.len(), 3);
         assert!(ed
             .tab_labels()
             .iter()
             .any(|(name, active)| name == "second.txt" && *active));
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn tabs_switch_and_close_keep_buffers() {
+        let mut ed = editor("one\n");
+        ed.new_tab();
+        assert_eq!(ed.tab_count(), 2);
+        assert_eq!(ed.buffer_text(), "");
+        ed.handle_key(Key::ch('x'));
+        assert_eq!(ed.buffer_text(), "x");
 
         ed.switch_tab(-1);
-        assert_eq!(ed.buffer_text(), "first\n");
+        assert_eq!(ed.buffer_text(), "one\n");
         ed.switch_tab(1);
-        assert_eq!(ed.buffer_text(), "second\n");
+        assert_eq!(ed.buffer_text(), "x");
 
         ed.close_tab();
         assert_eq!(ed.tab_count(), 1);
-        assert_eq!(ed.buffer_text(), "first\n");
-        ed.close_tab();
-        assert!(ed.should_quit);
-        fs::remove_dir_all(&dir).ok();
+        assert_eq!(ed.buffer_text(), "one\n");
+        assert!(ed.buffers.iter().any(|slot| slot
+            .buffer
+            .as_ref()
+            .is_some_and(|buffer| buffer.text() == "x")));
+    }
+
+    #[test]
+    fn c_x_t_0_closes_the_current_tab() {
+        let mut ed = editor("one\n");
+        ed.new_tab();
+        assert_eq!(ed.tab_count(), 2);
+        ed.handle_key(Key::ctrl('x'));
+        ed.handle_key(Key::ch('t'));
+        ed.handle_key(Key::ch('0'));
+        assert_eq!(ed.tab_count(), 1);
+        assert_eq!(ed.buffer_text(), "one\n");
+        assert!(!ed.should_quit);
     }
 
     #[test]
@@ -3949,17 +4132,164 @@ mod tests {
     }
 
     #[test]
-    fn window_layouts_are_kept_per_tab() {
+    fn a_new_tab_starts_with_an_empty_buffer() {
         let mut ed = editor("one\n");
         ed.handle_key(Key::ctrl('x'));
         ed.handle_key(Key::ch('3'));
         assert_eq!(ed.windows.len(), 2);
 
         ed.new_tab();
+        assert_eq!(ed.tab_count(), 2);
         assert_eq!(ed.windows.len(), 1);
+        assert_eq!(ed.buffer_text(), "");
 
         ed.switch_tab(-1);
         assert_eq!(ed.windows.len(), 2);
+        assert_eq!(ed.buffer_text(), "one\n");
+    }
+
+    #[test]
+    fn split_windows_keep_points_across_tabs_and_renders() {
+        let dir = temp_dir();
+        let first = dir.join("first.txt");
+        let second = dir.join("second.txt");
+        fs::write(&first, "a1\na2\na3\na4\na5\n").unwrap();
+        fs::write(&second, "b1\nb2\nb3\nb4\nb5\n").unwrap();
+        let mut ed = Editor::open(Some(first), Config::default()).unwrap();
+        ed.handle_key(Key::ctrl('x'));
+        ed.handle_key(Key::ch('3'));
+        ed.open_file(second);
+
+        ed.handle_key(Key::ctrl('n'));
+        crate::render::render(&mut ed, 60, 12);
+        assert_eq!(ed.buffer.point, Point::new(1, 0));
+
+        ed.handle_key(Key::ctrl('x'));
+        ed.handle_key(Key::ch('o'));
+        crate::render::render(&mut ed, 60, 12);
+        assert_eq!(ed.buffer.point, Point::new(0, 0));
+        ed.handle_key(Key::ctrl('n'));
+        ed.handle_key(Key::ctrl('n'));
+        crate::render::render(&mut ed, 60, 12);
+        assert_eq!(ed.buffer.point, Point::new(2, 0));
+
+        ed.handle_key(Key::ctrl('x'));
+        ed.handle_key(Key::ch('o'));
+        crate::render::render(&mut ed, 60, 12);
+        assert_eq!(ed.buffer.point, Point::new(1, 0));
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn split_panes_keep_independent_points() {
+        let mut ed = editor("one\ntwo\nthree\nfour\n");
+        ed.handle_key(Key::ctrl('x'));
+        ed.handle_key(Key::ch('2'));
+
+        ed.handle_key(Key::ctrl('n'));
+        assert_eq!(ed.buffer.point, Point::new(1, 0));
+
+        ed.handle_key(Key::ctrl('x'));
+        ed.handle_key(Key::ch('o'));
+        assert_eq!(ed.buffer.point, Point::new(0, 0));
+        ed.handle_key(Key::ctrl('n'));
+        ed.handle_key(Key::ctrl('n'));
+        assert_eq!(ed.buffer.point, Point::new(2, 0));
+
+        ed.handle_key(Key::ctrl('x'));
+        ed.handle_key(Key::ch('o'));
+        assert_eq!(ed.buffer.point, Point::new(1, 0));
+        ed.handle_key(Key::ctrl('x'));
+        ed.handle_key(Key::ch('o'));
+        assert_eq!(ed.buffer.point, Point::new(2, 0));
+    }
+
+    #[test]
+    fn find_file_opens_in_the_active_split() {
+        let dir = temp_dir();
+        let first = dir.join("first.txt");
+        let second = dir.join("second.txt");
+        fs::write(&first, "first\n").unwrap();
+        fs::write(&second, "second\n").unwrap();
+        let mut ed = Editor::open(Some(first), Config::default()).unwrap();
+        ed.handle_key(Key::ctrl('x'));
+        ed.handle_key(Key::ch('3'));
+        let first_buffer = ed.active_buffer;
+
+        ed.open_file(second);
+        assert_eq!(ed.tab_count(), 1);
+        assert_eq!(ed.buffer_text(), "second\n");
+        assert_ne!(ed.active_buffer, first_buffer);
+        let other = (0..ed.windows.len())
+            .find(|index| *index != ed.windows.active())
+            .unwrap();
+        assert_eq!(ed.windows.window(other).buffer, first_buffer);
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn find_file_opens_in_the_focused_right_split() {
+        let dir = temp_dir();
+        let first = dir.join("first.txt");
+        let second = dir.join("second.txt");
+        fs::write(&first, "first\n").unwrap();
+        fs::write(&second, "second\n").unwrap();
+        let mut ed = Editor::open(Some(first), Config::default()).unwrap();
+        ed.handle_key(Key::ctrl('x'));
+        ed.handle_key(Key::ch('3'));
+        ed.handle_key(Key::ctrl('x'));
+        ed.handle_key(Key::ch('o'));
+        let first_buffer = ed.active_buffer;
+        assert_eq!(ed.windows.active(), 1);
+
+        ed.open_file(second);
+        assert_eq!(ed.tab_count(), 1);
+        assert_eq!(ed.windows.active_window().buffer, ed.active_buffer);
+        assert_ne!(ed.active_buffer, first_buffer);
+        assert_eq!(ed.windows.window(0).buffer, first_buffer);
+        assert_eq!(ed.buffer_text(), "second\n");
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn opening_an_existing_file_reuses_its_buffer() {
+        let dir = temp_dir();
+        let first = dir.join("first.txt");
+        let second = dir.join("second.txt");
+        fs::write(&first, "first\n").unwrap();
+        fs::write(&second, "second\n").unwrap();
+        let mut ed = Editor::open(Some(first), Config::default()).unwrap();
+        ed.handle_key(Key::ctrl('x'));
+        ed.handle_key(Key::ch('3'));
+        ed.open_file(second.clone());
+
+        ed.handle_key(Key::ctrl('x'));
+        ed.handle_key(Key::ch('o'));
+        assert_eq!(ed.buffer_text(), "first\n");
+        let buffers_before = ed.buffers.len();
+        ed.open_file(second);
+        assert_eq!(ed.tab_count(), 1);
+        assert_eq!(ed.buffer_text(), "second\n");
+        assert_eq!(ed.buffers.len(), buffers_before);
+        assert_eq!(ed.windows.active_window().buffer, ed.active_buffer);
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn closing_a_tab_keeps_its_buffers_alive() {
+        let mut ed = editor("one\n");
+        ed.handle_key(Key::ctrl('x'));
+        ed.handle_key(Key::ch('2'));
+        ed.new_tab();
+        ed.handle_key(Key::ch('x'));
+        ed.close_tab();
+        assert_eq!(ed.tab_count(), 1);
+        assert_eq!(ed.windows.len(), 2);
+        assert_eq!(ed.buffer_text(), "one\n");
+        assert!(ed.buffers.iter().any(|slot| slot
+            .buffer
+            .as_ref()
+            .is_some_and(|buffer| buffer.text() == "x")));
     }
 
     #[test]
@@ -4015,51 +4345,57 @@ mod tests {
     }
 
     #[test]
-    fn tabs_preserve_unsaved_buffers() {
+    fn opening_a_file_keeps_the_previous_buffer() {
         let dir = temp_dir();
         let first = dir.join("first.txt");
         fs::write(&first, "first\n").unwrap();
         let mut ed = editor("");
         ed.handle_key(Key::ch('d'));
-        ed.open_file(first.clone());
-        assert_eq!(ed.tab_count(), 2);
-        assert_eq!(ed.buffer_text(), "first\n");
-        ed.switch_tab(-1);
-        assert_eq!(ed.buffer_text(), "d");
         ed.open_file(first);
-        assert_eq!(ed.tab_count(), 2);
+        assert_eq!(ed.tab_count(), 1);
         assert_eq!(ed.buffer_text(), "first\n");
+        assert!(ed.buffers.iter().any(|slot| slot
+            .buffer
+            .as_ref()
+            .is_some_and(|buffer| { buffer.text() == "d" && buffer.has_unsaved_changes() })));
         fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
-    fn quit_switches_to_another_unsaved_tab_first() {
+    fn quit_warns_about_hidden_unsaved_buffers() {
         let dir = temp_dir();
         let path = dir.join("clean.txt");
         fs::write(&path, "clean\n").unwrap();
         let mut ed = editor("");
         ed.handle_key(Key::ch('x'));
         ed.open_file(path);
-        assert_eq!(ed.tab_count(), 2);
+        assert_eq!(ed.tab_count(), 1);
         assert_eq!(ed.buffer_text(), "clean\n");
         ed.handle_key(Key::ctrl('x'));
         ed.handle_key(Key::ctrl('c'));
         assert!(!ed.should_quit);
-        assert_eq!(ed.buffer_text(), "x");
-        assert!(ed.message.contains("unsaved"));
+        assert_eq!(ed.buffer_text(), "clean\n");
+        assert!(ed
+            .prompt_for_quit()
+            .is_some_and(|question| question.contains("other buffer")));
         fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
-    fn tab_close_refuses_unsaved_changes() {
+    fn closing_a_modified_tab_keeps_its_buffer_hidden() {
         let mut ed = editor("");
         ed.new_tab();
         assert_eq!(ed.tab_count(), 2);
         ed.handle_key(Key::ch('x'));
         ed.close_tab();
-        assert_eq!(ed.tab_count(), 2);
+        assert_eq!(ed.tab_count(), 1);
         assert!(!ed.should_quit);
-        assert!(ed.message.contains("modified"));
+        ed.handle_key(Key::ctrl('x'));
+        ed.handle_key(Key::ctrl('c'));
+        assert!(!ed.should_quit);
+        assert!(ed
+            .prompt_for_quit()
+            .is_some_and(|question| question.contains("other buffer")));
     }
 
     #[test]

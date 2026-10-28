@@ -7,7 +7,8 @@ minibuffer completion, and [Spelling](spelling.md) for spell checking.
 
 ## Files and buffers
 
-- `find-file` — open a file in a new tab (or select its existing tab).
+- `find-file` — show a file in the current window, reusing its buffer if it
+  is already open. Does not create a tab.
 - `save-buffer` — save the current buffer.
 - `write-file` — write the buffer to a different file.
 - `revert-buffer` — reload the file from disk.
@@ -40,7 +41,7 @@ minibuffer completion, and [Spelling](spelling.md) for spell checking.
 - `previous-error` — jump to the previous LSP diagnostic.
 - `tab-next` — switch to the next tab.
 - `tab-previous` — switch to the previous tab.
-- `tab-new` — create a scratch tab.
+- `tab-new` — create a tab with an empty buffer.
 - `tab-close` — close the current tab.
 - `flyspell-mode` — enable or disable spell checking in prose modes.
 - `spell-check-mode` — alias for `flyspell-mode`.

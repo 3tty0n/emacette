@@ -2,7 +2,7 @@
 
 use unicode_width::UnicodeWidthChar;
 
-use crate::buffer::Buffer;
+use crate::buffer::{Buffer, Point};
 
 /// Width of a character in a terminal cell (tabs handled separately).
 pub fn cell_width(c: char) -> usize {
@@ -161,6 +161,8 @@ pub struct View {
     pub top_offset: usize,
     /// Horizontal scroll in display cells (only used when truncating).
     pub left: usize,
+    /// Cursor position for this pane.
+    pub point: Point,
     pub line_numbers: bool,
     pub tab_width: usize,
     pub highlight_trailing_ws: bool,
@@ -183,6 +185,7 @@ impl Default for View {
             top: 0,
             top_offset: 0,
             left: 0,
+            point: Point::default(),
             line_numbers: true,
             tab_width: 4,
             highlight_trailing_ws: true,
@@ -214,9 +217,13 @@ impl View {
             .max(1)
     }
 
-    /// Keep the viewport inside the buffer after switching buffers or tabs.
+    /// Keep the viewport and point inside the buffer after switching buffers
+    /// or editing another pane.
     pub fn clamp(&mut self, buffer: &Buffer) {
         self.top = self.top.min(buffer.line_count().saturating_sub(1));
+        self.point.row = self.point.row.min(buffer.line_count().saturating_sub(1));
+        let line = &buffer.lines[self.point.row];
+        self.point.col = self.point.col.min(line.len());
     }
 
     pub fn gutter(&self, line_count: usize) -> usize {

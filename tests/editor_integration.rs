@@ -84,7 +84,7 @@ fn find_file_prompt_opens_a_file() {
 }
 
 #[test]
-fn find_file_opens_a_new_tab_when_buffer_is_modified() {
+fn find_file_keeps_a_modified_buffer_hidden() {
     let dir = temp_dir();
     let target = dir.join("other.txt");
     fs::write(&target, "other\n").unwrap();
@@ -95,10 +95,12 @@ fn find_file_opens_a_new_tab_when_buffer_is_modified() {
     type_text(&mut ed, target.to_str().unwrap());
     press(&mut ed, &[ENTER]);
     assert_eq!(ed.buffer_text(), "other\n");
-    assert_eq!(ed.tab_count(), 2);
-    press(&mut ed, &[Key::ctrl('x'), Key::ch('t'), Key::ch('p')]);
-    assert_eq!(ed.buffer_text(), "dirty");
-    assert_eq!(ed.tab_count(), 2);
+    assert_eq!(ed.tab_count(), 1);
+    press(&mut ed, &[Key::ctrl('x'), Key::ctrl('c')]);
+    assert!(!ed.should_quit);
+    assert!(ed
+        .prompt_for_quit()
+        .is_some_and(|question| question.contains("other buffer")));
 }
 
 #[test]

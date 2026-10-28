@@ -418,6 +418,7 @@ def test_tabs_switch_files():
         code, out, _ = run(
             [BIN, alpha],
             [
+                b"\x18t", b"2",  # C-x t 2: new empty tab
                 b"\x18\x06",  # C-x C-f
                 b"\x01\x0b",  # clear prompt
                 b"beta.txt",
@@ -474,6 +475,48 @@ def test_window_split():
         content == "alpha\nbeta\ngamma\n",
         repr(content),
     )
+
+
+def test_split_find_file():
+    directory = tempfile.mkdtemp(prefix="emacette-e2e-")
+    alpha = os.path.join(directory, "alpha.txt")
+    beta = os.path.join(directory, "beta.txt")
+    with open(alpha, "w", encoding="utf-8") as handle:
+        handle.write("alpha-content\n")
+    with open(beta, "w", encoding="utf-8") as handle:
+        handle.write("beta-content\n")
+    previous = os.getcwd()
+    os.chdir(directory)
+    try:
+        code, out, _ = run(
+            [BIN, alpha],
+            [
+                b"\x183",  # C-x 3: split right
+                b"\x18\x06",  # C-x C-f
+                b"\x01\x0b",  # clear prompt
+                b"beta.txt",
+                b"\r",
+                b"\x18\x13",
+                b"\x18\x03",
+            ],
+            cols=COLS,
+            rows=ROWS,
+            expect=b"emacette",
+            key_delay=0.1,
+        )
+    finally:
+        os.chdir(previous)
+    check(
+        "find-file opens in the active split without adding a tab",
+        code == 0
+        and b"alpha-content" in out
+        and b"beta-content" in out
+        and b"alpha.txt" in out
+        and b"beta.txt" in out
+        and b"alpha.txt  beta.txt" not in out,
+        repr(out[-500:]),
+    )
+    shutil.rmtree(directory, ignore_errors=True)
 
 
 def test_quit_without_changes_is_immediate():
@@ -732,6 +775,7 @@ def main():
     test_spell_check()
     test_tabs_switch_files()
     test_window_split()
+    test_split_find_file()
     test_quit_without_changes_is_immediate()
     test_escape_meta_word_motion()
     test_search_and_insert()

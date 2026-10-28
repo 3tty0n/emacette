@@ -54,6 +54,7 @@ A few keys to get going:
 | Kill / copy / yank | `C-w` / `M-w` / `C-y` |
 | Split below / right | `C-x 2` / `C-x 3` |
 | Move to the other window | `C-x o` |
+| New / close tab | `C-x t 2` / `C-x t 0` |
 | Undo | `C-/` or `C-_` |
 | Help | `F1` |
 
@@ -75,8 +76,9 @@ A few keys to get going:
 - Millisecond startup; a single binary with nothing else to install.
 - Only changed screen rows are repainted, so editing stays responsive over
   SSH and inside tmux.
-- Multiple files in tabs, with unsaved-tab protection and a tab bar.
-- Window splits (`C-x 2`, `C-x 3`) with independent scrolling in each pane.
+- Multiple tabs, each with its own window layout, and a tab bar.
+- Window splits (`C-x 2`, `C-x 3`) with independent cursors and scrolling;
+  each pane can show its own file; `C-x C-f` does not create a tab.
 - Auto-indent and automatic delimiter pairs, plus rainbow parentheses in Lisp
   modes.
 - Line numbers, trailing-whitespace highlighting, horizontal scrolling, soft
@@ -143,8 +145,8 @@ See the annotated [example configuration](examples/config) and the
 ## Documentation
 
 - **[User guide](docs/user/README.md)** — installation, key bindings, commands,
-  windows, tabs, configuration, languages, completion, spelling, LSP, git,
-  and tmux.
+  windows, tabs and buffers, configuration, languages, completion, spelling,
+  LSP, git, and tmux.
 - **[Development guide](docs/development/README.md)** — architecture, testing,
   contribution workflow, benchmarks, and releases.
 - **[Documentation index](docs/README.md)** — both guides in one place.
@@ -168,8 +170,8 @@ documentation split by audience: user-facing behavior belongs under
 
 ## Limitations
 
-- Split panes all show the active buffer; there is no separate buffer per
-  pane.
+- There is no buffer list command; hidden buffers are reused by opening their
+  file again.
 - UTF-8 only; binary and non-UTF-8 files are rejected.
 - Kill ring only; no system clipboard integration.
 - LSP support covers diagnostics and completion only; no hover, rename, or

@@ -1,8 +1,8 @@
 //! Window layout: a binary split tree over independent viewports.
 //!
-//! All windows show the active buffer. They share point and text, but keep
-//! their own scroll position and dimensions, which is what makes splitting
-//! useful for looking at two parts of the same file.
+//! A window points at a buffer and keeps its own viewport and point.
+//! Several windows may show the same buffer; they share the text but not the
+//! cursor position.
 
 use crate::view::View;
 
@@ -98,8 +98,15 @@ impl Layout {
 }
 
 #[derive(Clone, Debug)]
+pub struct Window {
+    pub view: View,
+    /// Index into `Editor::buffers`.
+    pub buffer: usize,
+}
+
+#[derive(Clone, Debug)]
 pub struct WindowSet {
-    views: Vec<View>,
+    windows: Vec<Window>,
     layout: Layout,
     active: usize,
 }
@@ -113,62 +120,93 @@ impl Default for WindowSet {
 impl WindowSet {
     pub fn single(view: View) -> Self {
         Self {
-            views: vec![view],
+            windows: vec![Window { view, buffer: 0 }],
             layout: Layout::Leaf(0),
             active: 0,
         }
     }
 
     pub fn len(&self) -> usize {
-        self.views.len()
+        self.windows.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.views.is_empty()
+        self.windows.is_empty()
     }
 
     pub fn active(&self) -> usize {
         self.active
     }
 
+    pub fn set_active(&mut self, index: usize) {
+        if index < self.windows.len() {
+            self.active = index;
+        }
+    }
+
+    pub fn active_window(&self) -> &Window {
+        &self.windows[self.active]
+    }
+
+    pub fn active_window_mut(&mut self) -> &mut Window {
+        &mut self.windows[self.active]
+    }
+
     pub fn active_view(&self) -> &View {
-        &self.views[self.active]
+        &self.windows[self.active].view
     }
 
     pub fn active_view_mut(&mut self) -> &mut View {
-        &mut self.views[self.active]
+        &mut self.windows[self.active].view
     }
 
-    pub fn views(&self) -> &[View] {
-        &self.views
+    pub fn window(&self, index: usize) -> &Window {
+        &self.windows[index]
     }
 
-    pub fn views_mut(&mut self) -> &mut [View] {
-        &mut self.views
+    pub fn window_mut(&mut self, index: usize) -> &mut Window {
+        &mut self.windows[index]
+    }
+
+    pub fn windows(&self) -> &[Window] {
+        &self.windows
+    }
+
+    pub fn windows_mut(&mut self) -> &mut [Window] {
+        &mut self.windows
     }
 
     pub fn layout(&self) -> &Layout {
         &self.layout
     }
 
+    pub fn windows_for_buffer(&self, buffer: usize) -> Vec<usize> {
+        self.windows
+            .iter()
+            .enumerate()
+            .filter(|(_, window)| window.buffer == buffer)
+            .map(|(index, _)| index)
+            .collect()
+    }
+
     /// Split the active window, leaving the active view selected.
     pub fn split(&mut self, dir: SplitDir) -> bool {
-        if self.views.len() >= MAX_WINDOWS {
+        if self.windows.len() >= MAX_WINDOWS {
             return false;
         }
-        let mut new_view = self.views[self.active];
-        new_view.top_offset = 0;
-        let new = self.views.len();
+        let mut new_window = self.windows[self.active].clone();
+        new_window.view.top_offset = 0;
+        let new = self.windows.len();
         if !self.layout.split_leaf(self.active, new, dir) {
             return false;
         }
-        self.views.push(new_view);
+        self.windows.push(new_window);
         true
     }
 
     /// Select the next window in layout order.
     pub fn other(&mut self) -> bool {
-        if self.views.len() <= 1 {
+        if self.windows.len() <= 1 {
             return false;
         }
         let ids = self.layout.leaf_ids();
@@ -179,7 +217,7 @@ impl WindowSet {
 
     /// Close the active window. The last window is never closed.
     pub fn delete_active(&mut self) -> bool {
-        if self.views.len() <= 1 {
+        if self.windows.len() <= 1 {
             return false;
         }
         let target = self.active;
@@ -187,19 +225,19 @@ impl WindowSet {
             return false;
         };
         layout.renumber_after(target);
-        self.views.remove(target);
+        self.windows.remove(target);
         self.layout = layout;
-        self.active = target.min(self.views.len() - 1);
+        self.active = target.min(self.windows.len() - 1);
         true
     }
 
     /// Close every window except the active one.
     pub fn delete_others(&mut self) -> bool {
-        if self.views.len() <= 1 {
+        if self.windows.len() <= 1 {
             return false;
         }
-        let view = self.views[self.active];
-        self.views = vec![view];
+        let window = self.windows[self.active].clone();
+        self.windows = vec![window];
         self.layout = Layout::Leaf(0);
         self.active = 0;
         true
@@ -234,6 +272,29 @@ mod tests {
     }
 
     #[test]
+    fn split_windows_share_the_buffer_but_not_the_point() {
+        let mut windows = set();
+        windows.active_view_mut().point.row = 4;
+        windows.active_view_mut().point.col = 2;
+        windows.split(SplitDir::LeftRight);
+        assert_eq!(windows.window(0).buffer, 0);
+        assert_eq!(windows.window(1).buffer, 0);
+        assert_eq!(windows.window(1).view.point.row, 4);
+        assert_eq!(windows.window(1).view.point.col, 2);
+        windows.window_mut(1).view.point.row = 10;
+        assert_eq!(windows.window(0).view.point.row, 4);
+    }
+
+    #[test]
+    fn windows_can_point_at_different_buffers() {
+        let mut windows = set();
+        windows.split(SplitDir::LeftRight);
+        windows.window_mut(1).buffer = 3;
+        assert_eq!(windows.windows_for_buffer(0), vec![0]);
+        assert_eq!(windows.windows_for_buffer(3), vec![1]);
+    }
+
+    #[test]
     fn deleting_a_window_collapses_its_parent() {
         let mut windows = set();
         windows.split(SplitDir::LeftRight);
@@ -245,7 +306,7 @@ mod tests {
         assert!(windows.delete_active());
         assert_eq!(windows.len(), 2);
         assert_eq!(windows.active(), 1);
-        assert_eq!(windows.views().len(), windows.layout().leaf_ids().len());
+        assert_eq!(windows.windows().len(), windows.layout().leaf_ids().len());
         assert!(windows.layout().leaf_ids().iter().all(|id| *id < 2));
     }
 
@@ -256,10 +317,12 @@ mod tests {
         windows.split(SplitDir::LeftRight);
         windows.other();
         let active_view = *windows.active_view();
+        let active_buffer = windows.active_window().buffer;
         assert!(windows.delete_others());
         assert_eq!(windows.len(), 1);
         assert_eq!(windows.active(), 0);
         assert_eq!(*windows.active_view(), active_view);
+        assert_eq!(windows.active_window().buffer, active_buffer);
     }
 
     #[test]

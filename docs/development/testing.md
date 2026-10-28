@@ -106,6 +106,8 @@ Before a release, also check by hand:
 - search forward and backward, accept and abort;
 - switch and close tabs, including a modified tab;
 - split horizontally and vertically, switch panes, and close them;
+- open a different file in one pane and confirm both files stay visible and
+  no tab is added;
 - run `git commit` with emacette as `core.editor`;
 - resize the terminal while a completion popup is open;
 - run inside tmux if you use it.

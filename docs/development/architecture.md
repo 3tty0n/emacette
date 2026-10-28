@@ -76,38 +76,50 @@ enters the alternate screen, installs the tmux key guard, and then runs:
 
 ## Editor state and tabs
 
-`Editor` owns the state of the active tab: `Buffer`, the active `View`, the
-window set (`WindowSet`), language mode, effective `Settings`, `Highlighter`,
-minibuffer, search, completion, spell state, LSP client, and diagnostics.
-Inactive tabs are stored as `TabState`.
+`Editor` owns the live state of the active buffer: `Buffer`, language mode,
+effective `Settings`, `Highlighter`, spell state, LSP client, diagnostics, and
+the transient UI state. The other buffers are stored as `BufferSlot` values in
+`Editor.buffers`; `Editor.active_buffer` identifies the live one.
 
-Switching tabs is a stash/load operation:
+Tabs are window layouts, not buffers. An inactive tab stores a `WindowSet`;
+the active tab's window set lives in `Editor.windows`. Each `Window` stores a
+`View` (including its own cursor point) and a buffer index.
 
-1. `stash_active_tab()` moves the active `Buffer`, its window layout, and
-   related state into the current `TabState`.
-2. `active_tab` changes.
-3. `load_active_tab()` moves the stored state back into `Editor` and rebuilds
+Switching the buffer shown in a window is a stash/load operation:
+
+1. `stash_buffer_state()` moves the live buffer state into its `BufferSlot`.
+2. `active_buffer` and the window's buffer index change.
+3. `load_buffer_state()` moves the stored state back into `Editor` and rebuilds
    the highlighter.
 
-The kill ring and command history live on `Editor`, not on a tab, so they are
-shared. Unsaved buffers are never discarded by tab switching.
+Switching tabs stashes the current window set and live buffer, then loads the
+target tab's `WindowSet` and its active window's buffer. Buffers outlive tabs:
+`C-x C-f` changes the active window's buffer without touching the tab bar, and
+closing a tab leaves its buffers in the pool.
+
+The kill ring and command history live on `Editor`, not on a tab or buffer, so
+they are shared. Unsaved buffers are never discarded by switching tabs or
+opening a file in another pane; quitting warns about hidden modified buffers.
 
 ## Windows
 
 `window.rs` models the split layout as a binary tree of `Layout::Leaf` and
-`Layout::Split` nodes. `WindowSet` holds one `View` per leaf, the tree, and the
-active window index.
+`Layout::Split` nodes. `WindowSet` holds one `Window` per leaf, the tree, and
+the active window index. A `Window` is a `View` plus a buffer index.
 
-- All panes display the active buffer. They share point, text, mark, and undo
-  state, but each `View` keeps its own `top`, `top_offset`, and `left`.
-- `Editor.view` is the live copy of the active pane. Input and movement
-  commands work on it; `sync_active_view()` copies it back into the window set
-  before rendering, switching windows, or stashing a tab.
+- A `View` carries the pane's `point`, `top`, `top_offset`, and `left`.
+  Windows showing the same buffer share text, mark, and undo state, but have
+  independent cursors and scroll positions. Different windows may point at
+  different buffers.
+- `Editor.view` is the live copy of the active pane and `Editor.buffer` is the
+  active window's buffer. `sync_active_view()` writes cursor and viewport back
+  to the window; `load_active_view()` restores the cursor from a window.
 - `C-x 2` / `C-x 3` split the active leaf and leave the original pane active.
   `C-x o` cycles through leaves in layout order; `C-x 0` and `C-x 1` collapse
-  the tree.
-- Window layouts are part of `TabState`, so each tab restores its own splits
-  and scroll positions.
+  the tree. `C-x C-f` creates or reuses a buffer and shows it in the active
+  window, leaving other windows alone.
+- Each tab owns its own `WindowSet`. `C-x t 2` creates a tab with a single
+  window showing a new empty buffer.
 - The frame rows (tab bar, mode line, echo area, menus) are shared; pane
   rectangles exclude them. Pane views therefore set `View.chrome_rows = 0`.
 
@@ -168,6 +180,12 @@ by the layout tree. Each leaf is rendered into its own rows, padded to the
 rectangle width, and the results are joined with a horizontal `-` row or a
 vertical `|` column. The mode line and echo area remain global rows. The
 completion popup is built for the active pane, so it stays inside that pane.
+
+Windows that show the active buffer use the live editor state. For windows
+that show another buffer, the renderer stashes the active buffer state, loads
+each inactive buffer with `load_buffer_state()`, renders all windows that
+display it, and stashes it again. Cursor, viewport, and buffer state are
+restored before the frame is finished, so this is invisible to the input code.
 
 Two layout modes are supported:
 
@@ -230,15 +248,15 @@ overrides it for the current tab only.
 - Runs a reader thread and sends events through `mpsc`; `Editor::poll_lsp`
   drains them without blocking.
 
-One client is managed per tab; switching tabs keeps the server and its
-diagnostics with the tab. There is no hover, rename,
+One client is managed per buffer; switching buffers keeps the server and its
+diagnostics with the buffer. There is no hover, rename,
 formatting, code action, or workspace edit support.
 
 ## Spelling
 
 `spell.rs` loads a plain word list or the base words of a hunspell `.dic` file.
 Affixes are not expanded. The checker uses syntax spans to skip code, comments,
-math, and markup commands, and keeps its state per tab. Checks are synchronous
+math, and markup commands, and keeps its state per buffer. Checks are synchronous
 and cached; only visible rows are checked for highlighting.
 
 ## tmux integration
@@ -273,6 +291,10 @@ the editor and view.
 - Keep `editor.rs` and `buffer.rs` free of terminal dependencies.
 - Call `sync_active_view()` before reading the window set; `Editor.view` is the
   source of truth while handling input.
+- `active_buffer` must match the active window's buffer. Use
+  `focus_active_window()`, `show_buffer_in_active_window()`, and
+  `switch_to_tab()` rather than changing either side by hand.
+- Buffers outlive tabs. Never drop a `BufferSlot` when closing a tab.
 - Every screen row added above the body must be accounted for in layout and
   cursor positioning. Split pane heights exclude the frame rows, so their
   views use `chrome_rows = 0`.

@@ -15,10 +15,10 @@ Part of the [emacette user guide](README.md).
 - `C-x C-s` — save the buffer.
 - `C-x C-c` — quit; prompt only when the buffer differs from the last loaded or saved text.
 - `C-x C-w` — write the buffer to a file (save as).
-- `C-x C-f` — find a file; opens in a new tab.
+- `C-x C-f` — find and show a file in the current window (no new tab).
 - `C-x t n` / `C-x t p` — next / previous tab.
-- `C-x t 2` — new scratch tab.
-- `C-x t k` — close the current tab.
+- `C-x t 2` — new tab with an empty buffer.
+- `C-x t 0` — close the current tab; `C-x t k` is an alias.
 - `M-<right>` / `M-<left>` — next / previous tab.
 - `C-c C-c` — save and quit, finishing a git commit.
 - `C-c C-k` — abort a git commit without saving (prompts only when changed).
@@ -31,8 +31,9 @@ Part of the [emacette user guide](README.md).
 - `C-x 0` — delete the current window.
 - `C-x 1` — delete every other window.
 
-Split panes share the buffer and point but keep their own scroll position.
-See [Windows](windows.md).
+Panes showing the same buffer share the text but keep their own cursor and
+scroll position. `C-x C-f` opens a file in the current pane. See
+[Windows](windows.md).
 
 ## Moving
 
