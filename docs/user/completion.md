@@ -34,9 +34,9 @@ above the mode line. The list updates while you type.
 - `TAB` again cycles through matching commands.
 - `S-TAB` cycles backwards.
 
-### Candidate menu
+### Minibuffer candidate menu
 
-- The menu reserves up to six rows above the mode line.
+- The minibuffer list reserves up to six rows above the mode line.
 - The selected candidate is highlighted with `>`.
 - The list scrolls to keep the selected candidate visible.
 
@@ -52,30 +52,33 @@ off in prose, markup, and data formats.
   automatic behavior, or in a language section to disable it for that
   language only. Set it to `true` to enable completion everywhere.
 - `M-x toggle-editor-completion` toggles the current tab at runtime.
-- After two word characters, a candidate menu appears automatically.
-- `M-x complete-symbol` opens the menu manually at any prefix length.
+- After two word characters, a candidate popup appears at point automatically.
+- `M-x complete-symbol` opens the popup manually at any prefix length.
 - Candidates come from words and `\commands` in the current buffer.
 - If an LSP server is configured for the language, `M-x complete-symbol`
   requests server completions as well. See [LSP](lsp.md).
 - LSP requests are also sent while typing when completion is active (automatic in code files, or enabled explicitly).
-- Buffer-word candidates appear immediately; LSP results replace the menu when
+- Buffer-word candidates appear immediately; LSP results replace the popup when
   they arrive.
 - A manual LSP request works with an empty prefix, so member completion after
   `.` can use the server.
 - The local prefix is matched case-sensitively.
 - Up to 100 local candidates and 200 LSP candidates are kept.
 
-Keys while the editor menu is open:
+Keys while the editor popup is open:
 
 - `TAB` or `RET` — accept the selected candidate.
 - `Down` / `C-n` — select the next candidate.
 - `Up` / `C-p` — select the previous candidate.
-- `Esc` or `C-g` — dismiss the menu.
+- `Esc` or `C-g` — dismiss the popup.
 - Word characters — continue typing and filter the candidates.
 - `Backspace` — shorten the prefix and filter again.
-- Any other key — dismiss the menu and handle the key normally.
+- Any other key — dismiss the popup and handle the key normally.
 
-The mode line shows `Comp` while editor completion is enabled.
+The popup is anchored at the cursor. It opens below point when there is room
+and above it otherwise, without shifting the rest of the screen. The selected
+candidate is highlighted, and the list scrolls to keep it visible. The mode
+line shows `Comp` while editor completion is enabled.
 
 ## Configuration
 

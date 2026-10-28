@@ -106,5 +106,5 @@ Before a release, also check by hand:
 - search forward and backward, accept and abort;
 - switch and close tabs, including a modified tab;
 - run `git commit` with emacette as `core.editor`;
-- resize the terminal while a completion menu is open;
+- resize the terminal while a completion popup is open;
 - run inside tmux if you use it.

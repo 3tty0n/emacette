@@ -85,7 +85,7 @@ diagnostics_popup = false
 - `diagnostics_popup` — show the current line's diagnostics in a popup.
 
 See [Configuration](configuration.md) for per-language sections and
-[Completion](completion.md) for the candidate menu.
+[Completion](completion.md) for the completion popup.
 
 ## Limitations
 

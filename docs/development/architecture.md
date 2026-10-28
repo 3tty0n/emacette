@@ -130,8 +130,9 @@ into one undo step and optionally coalesces consecutive inserts or deletes.
 
 ```text
 tab bar (optional)
-diagnostics popup / completion menu (optional)
+diagnostics popup (optional)
 text body        ← gutter + syntax + selection + search + spelling
+                   (editor completion popup is drawn over this area)
 mode line
 echo area / minibuffer
 ```
@@ -147,9 +148,11 @@ Two layout modes are supported:
 - `truncate_lines = false` — soft wrapping at the terminal width; `View.top`
   and `View.top_offset` identify the first visible wrapped segment.
 
-`View::ensure_visible` owns scrolling. Any new screen element (menu, popup,
-tab bar) must reserve rows in `View::{menu_rows, tab_rows}` so the body height
-stays correct.
+`View::ensure_visible` owns scrolling. Screen elements below the body, such
+as the minibuffer candidate list and the diagnostics popup, reserve rows in
+`View::menu_rows`; the tab bar does the same with `View::tab_rows`. The editor
+completion popup is different: it is anchored to the cursor and drawn over
+the text body, so it does not change the body height.
 
 ## Syntax highlighting
 

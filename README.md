@@ -85,7 +85,8 @@ A few keys to get going:
 
 - Syntax highlighting for 40 [languages and formats](docs/user/languages.md).
 - Editor completion from buffer words, with LSP completions when a server is
-  configured; automatic in programming-language files.
+  configured; candidates appear in a popup at point and completion is
+  automatic in programming-language files.
 - Optional [language-server integration](docs/user/lsp.md) for inline
   diagnostics, a diagnostics popup, and completion.
 - English [spell checking](docs/user/spelling.md) for prose such as Markdown,

@@ -95,7 +95,7 @@ Part of the [emacette user guide](README.md).
 - `TAB` or `RET` — accept the selected candidate.
 - `Down` / `C-n` — select the next candidate.
 - `Up` / `C-p` — select the previous candidate.
-- `Esc` or `C-g` — dismiss the completion menu.
+- `Esc` or `C-g` — dismiss the completion popup.
 - Word characters and `Backspace` — filter the candidates.
 - Other keys dismiss the menu and run normally.
 

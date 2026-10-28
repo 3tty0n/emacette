@@ -22,6 +22,36 @@ pub struct Frame {
     pub cursor: Option<(u16, u16)>,
 }
 
+/// A styled block of cells drawn over the buffer text, used for the editor
+/// completion popup.
+struct CompletionPopup {
+    x: usize,
+    y: usize,
+    width: usize,
+    rows: Vec<String>,
+}
+
+impl CompletionPopup {
+    /// The popup row that covers `row`, if any. `start` is relative to the
+    /// text body (the gutter is drawn separately).
+    fn overlay_for(&self, row: usize, gutter: usize) -> Option<LineOverlay<'_>> {
+        let index = row.checked_sub(self.y)?;
+        let content = self.rows.get(index)?;
+        Some(LineOverlay {
+            content,
+            start: self.x.saturating_sub(gutter),
+            width: self.width,
+        })
+    }
+}
+
+#[derive(Clone, Copy)]
+struct LineOverlay<'a> {
+    content: &'a str,
+    start: usize,
+    width: usize,
+}
+
 /// Stateful renderer that remembers the previous frame.
 pub struct Renderer {
     rows: Vec<String>,
@@ -63,7 +93,13 @@ impl Renderer {
         let (completion_rows, diagnostic_rows, menu_rows) = if editor.overlay.is_some() {
             (0, 0, 0)
         } else {
-            let completion = editor.completion_menu_count().min(6);
+            // Minibuffer candidates keep the list above the mode line.
+            // Editor completion is drawn as a popup at point instead.
+            let completion = if editor.minibuffer.is_some() {
+                editor.completion_menu_count().min(6)
+            } else {
+                0
+            };
             let diagnostics = editor.diagnostic_popup().len().min(4);
             let menu = (completion + diagnostics).min(editor.view.height.saturating_sub(3));
             let completion = completion.min(menu);
@@ -94,6 +130,20 @@ impl Renderer {
             .saturating_sub(editor.view.menu_rows)
             .saturating_sub(tab_rows);
 
+        // The completion popup is anchored to the cursor's screen cell, so
+        // compute the cursor before building the text rows.
+        let body_cursor = if editor.overlay.is_some() {
+            None
+        } else {
+            buffer_cursor(editor)
+        };
+        let gutter = editor.view.gutter(editor.buffer.line_count());
+        let popup = if editor.overlay.is_none() && editor.minibuffer.is_none() {
+            build_completion_popup(editor, body_rows, body_cursor, gutter)
+        } else {
+            None
+        };
+
         let mut rows: Vec<String> = Vec::with_capacity(terminal_height);
         let mut cursor = None;
         if tab_rows > 0 {
@@ -102,10 +152,10 @@ impl Renderer {
         if let Some(overlay) = editor.overlay {
             rows.extend(build_help_rows(editor, body_rows, overlay.scroll));
         } else {
-            rows.extend(build_text_rows(editor, body_rows));
+            rows.extend(build_text_rows(editor, body_rows, popup.as_ref()));
             rows.extend(build_completion_rows(editor, completion_rows));
             rows.extend(build_diagnostic_rows(editor, diagnostic_rows));
-            cursor = buffer_cursor(editor)
+            cursor = body_cursor
                 .filter(|&(_, y)| body_rows > 0 && y as usize <= body_rows)
                 .map(|(x, y)| (x, y + tab_rows as u16));
         }
@@ -207,15 +257,23 @@ fn push_style(out: &mut String, style: Style) {
     out.push('m');
 }
 
-fn build_text_rows(editor: &mut Editor, body_rows: usize) -> Vec<String> {
+fn build_text_rows(
+    editor: &mut Editor,
+    body_rows: usize,
+    popup: Option<&CompletionPopup>,
+) -> Vec<String> {
     if editor.view.truncate_lines {
-        build_truncated_text_rows(editor, body_rows)
+        build_truncated_text_rows(editor, body_rows, popup)
     } else {
-        build_wrapped_text_rows(editor, body_rows)
+        build_wrapped_text_rows(editor, body_rows, popup)
     }
 }
 
-fn build_truncated_text_rows(editor: &mut Editor, body_rows: usize) -> Vec<String> {
+fn build_truncated_text_rows(
+    editor: &mut Editor,
+    body_rows: usize,
+    popup: Option<&CompletionPopup>,
+) -> Vec<String> {
     let line_count = editor.buffer.line_count();
     let gutter = editor.view.gutter(line_count);
     let body_width = editor.view.body_width(line_count);
@@ -230,9 +288,29 @@ fn build_truncated_text_rows(editor: &mut Editor, body_rows: usize) -> Vec<Strin
 
     for screen_row in 0..body_rows {
         let row = top + screen_row;
+        let overlay = popup.and_then(|popup| popup.overlay_for(screen_row, gutter));
         let mut line = String::new();
         if row >= line_count {
             line.push_str(&" ".repeat(gutter));
+            draw_line(
+                &mut line,
+                &[],
+                &[],
+                left,
+                body_width,
+                tab_width,
+                &theme,
+                None,
+                None,
+                false,
+                &[],
+                None,
+                &[],
+                0,
+                0,
+                0,
+                overlay,
+            );
             rows.push(line);
             continue;
         }
@@ -295,13 +373,18 @@ fn build_truncated_text_rows(editor: &mut Editor, body_rows: usize) -> Vec<Strin
             0,
             chars.len(),
             0,
+            overlay,
         );
         rows.push(line);
     }
     rows
 }
 
-fn build_wrapped_text_rows(editor: &mut Editor, body_rows: usize) -> Vec<String> {
+fn build_wrapped_text_rows(
+    editor: &mut Editor,
+    body_rows: usize,
+    popup: Option<&CompletionPopup>,
+) -> Vec<String> {
     let line_count = editor.buffer.line_count();
     let gutter = editor.view.gutter(line_count);
     let body_width = editor.view.body_width(line_count);
@@ -320,8 +403,30 @@ fn build_wrapped_text_rows(editor: &mut Editor, body_rows: usize) -> Vec<String>
     };
 
     for _ in 0..body_rows {
+        let screen_row = rows.len();
+        let overlay = popup.and_then(|popup| popup.overlay_for(screen_row, gutter));
         if row >= line_count {
-            rows.push(" ".repeat(gutter));
+            let mut out = " ".repeat(gutter);
+            draw_line(
+                &mut out,
+                &[],
+                &[],
+                0,
+                body_width,
+                tab_width,
+                &theme,
+                None,
+                None,
+                false,
+                &[],
+                None,
+                &[],
+                0,
+                0,
+                0,
+                overlay,
+            );
+            rows.push(out);
             continue;
         }
 
@@ -391,6 +496,7 @@ fn build_wrapped_text_rows(editor: &mut Editor, body_rows: usize) -> Vec<String>
             start_idx,
             end_idx,
             start_display,
+            overlay,
         );
         rows.push(out);
 
@@ -426,10 +532,12 @@ fn draw_line(
     start_idx: usize,
     end_idx: usize,
     start_display: usize,
+    overlay: Option<LineOverlay<'_>>,
 ) {
     let end_idx = end_idx.min(chars.len());
     let mut idx = start_idx.min(end_idx);
     let mut col = start_display;
+    let mut body_pos = 0usize;
     if left > 0 {
         while idx < end_idx {
             let w = char_width(chars[idx], col, tab_width);
@@ -441,7 +549,9 @@ fn draw_line(
         }
         if col < left && idx < end_idx {
             // A wide character straddles the left edge: pad and skip it.
-            out.push_str(&" ".repeat(left - col));
+            let pad = left - col;
+            out.push_str(&" ".repeat(pad));
+            body_pos += pad;
             idx += 1;
             col = left;
         }
@@ -453,7 +563,8 @@ fn draw_line(
         .map(|i| i + 1)
         .unwrap_or(0);
 
-    let mut emitted = 0usize;
+    let overlay_end = overlay.map(|overlay| overlay.start + overlay.width);
+    let mut overlay_drawn = false;
     let mut span_idx = 0usize;
     let mut spell_idx = 0usize;
     let mut diagnostic_idx = 0usize;
@@ -463,8 +574,37 @@ fn draw_line(
     while idx < end_idx {
         let c = chars[idx];
         let w = char_width(c, col, tab_width);
-        if w > 0 && emitted + w > body_width {
+        if w > 0 && body_pos + w > body_width {
             break;
+        }
+        let char_start = body_pos;
+        let char_end = body_pos + w;
+
+        if let Some(overlay) = overlay {
+            let end = overlay_end.unwrap_or(overlay.start + overlay.width);
+            if !overlay_drawn
+                && (char_end > overlay.start || (w == 0 && char_start >= overlay.start))
+            {
+                if body_pos < overlay.start {
+                    out.push_str(&" ".repeat(overlay.start - body_pos));
+                }
+                out.push_str("\x1b[0m");
+                out.push_str(overlay.content);
+                out.push_str("\x1b[0m");
+                overlay_drawn = true;
+                styled = false;
+            }
+            if overlay_drawn && char_start < end {
+                // This background character is covered by the popup. Keep
+                // any cells that stick out past its right edge.
+                body_pos = char_end;
+                if char_end > end {
+                    out.push_str(&" ".repeat(char_end - end));
+                }
+                col += w;
+                idx += 1;
+                continue;
+            }
         }
 
         while span_idx < spans.len() && spans[span_idx].end <= idx {
@@ -553,9 +693,20 @@ fn draw_line(
             out.push(c);
         }
 
-        emitted += w;
+        body_pos += w;
         col += w;
         idx += 1;
+    }
+
+    if let Some(overlay) = overlay {
+        if !overlay_drawn {
+            if body_pos < overlay.start {
+                out.push_str(&" ".repeat(overlay.start - body_pos));
+            }
+            out.push_str("\x1b[0m");
+            out.push_str(overlay.content);
+            out.push_str("\x1b[0m");
+        }
     }
 }
 
@@ -928,6 +1079,118 @@ fn draw_segments(
     written
 }
 
+fn build_completion_popup(
+    editor: &Editor,
+    body_rows: usize,
+    cursor: Option<(u16, u16)>,
+    gutter: usize,
+) -> Option<CompletionPopup> {
+    if editor.minibuffer.is_some() {
+        return None;
+    }
+    let completion = editor.editor_completion.as_ref()?;
+    if completion.candidates.is_empty() {
+        return None;
+    }
+    let (cursor_x, cursor_y) = cursor?;
+    let cursor_row = cursor_y.saturating_sub(1) as usize;
+    let cursor_col = cursor_x.saturating_sub(1) as usize;
+
+    // Keep the popup narrow enough to leave the gutter and some context, and
+    // leave room for the border, marker, and padding.
+    let allowed_width = editor.view.width.saturating_sub(gutter).min(60);
+    if allowed_width < 8 || body_rows < 3 {
+        return None;
+    }
+    let max_text = completion
+        .candidates
+        .iter()
+        .map(|candidate| str_width(candidate))
+        .max()
+        .unwrap_or(0);
+    let text_width = max_text.min(allowed_width.saturating_sub(6)).max(1);
+    let popup_width = text_width + 6;
+
+    let selected = completion.index.min(completion.candidates.len() - 1);
+    let content_rows = completion.candidates.len().min(6);
+    let below = body_rows.saturating_sub(cursor_row + 1);
+    let above = cursor_row;
+    let desired_height = content_rows + 2;
+    // Prefer below the cursor, then above it, and finally shrink the list so
+    // the selected line stays visible.
+    let (content_rows, y) = if desired_height <= below {
+        (content_rows, cursor_row + 1)
+    } else if desired_height <= above {
+        (content_rows, cursor_row - desired_height)
+    } else {
+        let space = below.max(above);
+        let fit = content_rows.min(space.saturating_sub(2));
+        if fit == 0 {
+            return None;
+        }
+        let height = fit + 2;
+        if below >= height {
+            (fit, cursor_row + 1)
+        } else {
+            (fit, cursor_row.saturating_sub(height))
+        }
+    };
+
+    let x = cursor_col
+        .max(gutter)
+        .min(editor.view.width.saturating_sub(popup_width));
+    if x < gutter {
+        return None;
+    }
+
+    let start = if selected >= content_rows {
+        selected + 1 - content_rows
+    } else {
+        0
+    };
+    let theme = &editor.theme;
+    let border = {
+        let mut row = String::new();
+        push_style(&mut row, theme.completion);
+        row.push('+');
+        row.push_str(&"-".repeat(popup_width.saturating_sub(2)));
+        row.push('+');
+        row.push_str("\x1b[0m");
+        row
+    };
+    let inner_width = popup_width.saturating_sub(2);
+    let mut rows = Vec::with_capacity(content_rows + 2);
+    rows.push(border.clone());
+    for slot in 0..content_rows {
+        let index = start + slot;
+        let candidate = &completion.candidates[index];
+        let style = if index == selected {
+            theme.completion_selected
+        } else {
+            theme.completion
+        };
+        let mut row = String::new();
+        push_style(&mut row, style);
+        row.push('|');
+        row.push(' ');
+        row.push_str(if index == selected { "> " } else { "  " });
+        let text = truncate_to_width(candidate, text_width);
+        row.push_str(&text);
+        let used = 1 + 2 + str_width(&text);
+        row.push_str(&" ".repeat(inner_width.saturating_sub(used)));
+        row.push('|');
+        row.push_str("\x1b[0m");
+        rows.push(row);
+    }
+    rows.push(border);
+    Some(CompletionPopup {
+        x,
+        y,
+        width: popup_width,
+        rows,
+    })
+}
+
 fn build_completion_rows(editor: &Editor, menu_rows: usize) -> Vec<String> {
     if menu_rows == 0 {
         return Vec::new();
@@ -1155,7 +1418,7 @@ mod tests {
     }
 
     #[test]
-    fn editor_completion_menu_reserves_body_rows() {
+    fn editor_completion_renders_a_popup_at_the_cursor() {
         let config = Config {
             editor_completion: true,
             ..Config::default()
@@ -1166,12 +1429,82 @@ mod tests {
             ed.handle_key(Key::ch(c));
         }
         let frame = render(&mut ed, 40, 10);
-        assert_eq!(ed.view.menu_rows, 2);
-        assert_eq!(ed.view.body_height(), 6);
+        // The popup floats over the text instead of shrinking the body.
+        assert_eq!(ed.view.menu_rows, 0);
+        assert_eq!(ed.view.body_height(), 8);
         let plain = strip_ansi(&frame.output);
-        assert!(plain.contains("> alpha"), "{plain:?}");
+        assert!(plain.contains("+---"), "{plain:?}");
+        assert!(plain.contains("| > alpha"), "{plain:?}");
+        assert!(plain.contains("|   alphabet"), "{plain:?}");
         let (_, y) = frame.cursor.expect("cursor should stay visible");
         assert!(y as usize <= ed.view.body_height());
+    }
+
+    #[test]
+    fn editor_completion_popup_flips_above_near_the_bottom() {
+        let mut ed = Editor::from_text(&"line\n".repeat(20), None, Config::default());
+        ed.buffer.set_point(crate::buffer::Point::new(7, 0));
+        ed.editor_completion = Some(crate::completion::EditorCompletion {
+            candidates: vec!["alpha".into()],
+            index: 0,
+            start: crate::buffer::Point::new(7, 0),
+            end: crate::buffer::Point::new(7, 0),
+            prefix: "a".into(),
+        });
+        let frame = render(&mut ed, 40, 12);
+        let plain = strip_ansi(&frame.output);
+        assert!(plain.contains("| > alpha"), "{plain:?}");
+        // Point is on the last body row, so the popup has to go above it.
+        let (_, y) = frame.cursor.expect("cursor should stay visible");
+        assert_eq!(y as usize, 8);
+    }
+
+    fn draw_with_overlay(chars: &[char], start: usize, width: usize, content: &str) -> String {
+        let mut out = String::new();
+        draw_line(
+            &mut out,
+            chars,
+            &[],
+            0,
+            10,
+            4,
+            &Theme::dark(),
+            None,
+            None,
+            false,
+            &[],
+            None,
+            &[],
+            0,
+            chars.len(),
+            0,
+            Some(LineOverlay {
+                content,
+                start,
+                width,
+            }),
+        );
+        strip_ansi(&out)
+    }
+
+    #[test]
+    fn line_overlay_replaces_cells_and_keeps_the_suffix() {
+        let chars: Vec<char> = "abcdef".chars().collect();
+        assert_eq!(draw_with_overlay(&chars, 2, 3, "XYZ"), "abXYZf");
+    }
+
+    #[test]
+    fn line_overlay_handles_wide_characters() {
+        let chars: Vec<char> = "日本語".chars().collect();
+        // The overlay starts in the middle of the wide 日, so one padding
+        // cell is emitted and the covered 本 leaves one trailing cell.
+        assert_eq!(draw_with_overlay(&chars, 1, 2, "XY"), " XY 語");
+    }
+
+    #[test]
+    fn line_overlay_past_the_end_of_a_line() {
+        let chars: Vec<char> = "ab".chars().collect();
+        assert_eq!(draw_with_overlay(&chars, 5, 2, "XY"), "ab   XY");
     }
 
     #[test]
