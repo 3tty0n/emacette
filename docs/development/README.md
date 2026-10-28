@@ -113,3 +113,7 @@ The GitHub Actions workflow runs, in order:
 
 Run the same gates locally with `cargo fmt -- --check`,
 `cargo clippy --all-targets -- -D warnings`, `cargo test`, and `make e2e`.
+
+Pushing a `v*` tag runs the separate [release workflow](../../.github/workflows/release.yml),
+which verifies the tag, runs the tests, builds each platform archive, and
+publishes the GitHub release. See [Releasing](releasing.md).
