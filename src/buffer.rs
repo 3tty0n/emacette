@@ -349,9 +349,20 @@ impl Buffer {
     pub fn move_vertical(&mut self, delta: isize) {
         let goal = self.goal_col.unwrap_or(self.point.col);
         let max_row = self.lines.len().saturating_sub(1) as isize;
-        let row = (self.point.row as isize + delta).clamp(0, max_row) as usize;
+        let target = self.point.row as isize + delta;
+        let row = target.clamp(0, max_row) as usize;
         self.point.row = row;
-        self.point.col = goal.min(self.lines[row].len());
+        // Emacs's `next-line`/`previous-line` fall back to the end or the
+        // beginning of the line when the buffer ends before the requested
+        // line. This also lets a downward selection reach the last line of a
+        // buffer that does not end with a newline.
+        self.point.col = if target > max_row {
+            self.lines[row].len()
+        } else if target < 0 {
+            0
+        } else {
+            goal.min(self.lines[row].len())
+        };
         self.goal_col = Some(goal);
         self.last_yank = None;
     }
@@ -1145,6 +1156,31 @@ mod tests {
         buf.newline(true);
         assert_eq!(buf.text(), "    foo\n    ");
         assert_eq!(buf.point, Point::new(1, 4));
+    }
+
+    #[test]
+    fn vertical_motion_below_the_last_line_reaches_its_end() {
+        let mut buf = buffer("first\nlast");
+        buf.point = Point::new(0, 2);
+        buf.move_vertical(1);
+        assert_eq!(buf.point, Point::new(1, 2));
+        // There is no line below the last one, so point moves to its end;
+        // this is what lets a region cover the final line.
+        buf.move_vertical(1);
+        assert_eq!(buf.point, Point::new(1, 4));
+        // The goal column survives the fallback, as in Emacs.
+        buf.move_vertical(-1);
+        assert_eq!(buf.point, Point::new(0, 2));
+    }
+
+    #[test]
+    fn vertical_motion_above_the_first_line_reaches_its_start() {
+        let mut buf = buffer("first\nlast");
+        buf.point = Point::new(1, 3);
+        buf.move_vertical(-1);
+        assert_eq!(buf.point, Point::new(0, 3));
+        buf.move_vertical(-1);
+        assert_eq!(buf.point, Point::new(0, 0));
     }
 
     #[test]

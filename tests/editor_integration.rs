@@ -213,6 +213,21 @@ fn search_sets_mark_at_the_origin() {
 }
 
 #[test]
+fn selecting_down_to_the_bottom_includes_the_last_line() {
+    let mut ed = editor("alpha\nbeta");
+    press(&mut ed, &[Key::ctrl(' '), Key::ctrl('n'), Key::ctrl('n')]);
+    assert_eq!(
+        ed.buffer.region(),
+        Some((
+            emacette::buffer::Point::new(0, 0),
+            emacette::buffer::Point::new(1, 4),
+        ))
+    );
+    press(&mut ed, &[Key::ctrl('w')]);
+    assert_eq!(ed.buffer_text(), "");
+}
+
+#[test]
 fn save_without_a_name_prompts_instead_of_panicking() {
     let mut ed = editor("anonymous");
     press(&mut ed, &[Key::ctrl('x'), Key::ctrl('s')]);
