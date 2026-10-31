@@ -531,12 +531,10 @@ pub fn lex(lang: Lang, chars: &[char], state: LexState) -> (Vec<Span>, LexState)
 // helpers
 
 fn starts_with(chars: &[char], i: usize, pat: &str) -> bool {
-    let mut j = i;
-    for pc in pat.chars() {
+    for (j, pc) in (i..).zip(pat.chars()) {
         if j >= chars.len() || chars[j] != pc {
             return false;
         }
-        j += 1;
     }
     true
 }
