@@ -3138,11 +3138,28 @@ fn common_prefix(items: &[String]) -> String {
     prefix.into_iter().collect()
 }
 
+/// The last path component, keeping the trailing slash of a directory.
+/// The minibuffer already shows the directory, and a long absolute path in
+/// the hint would hide the file names on narrow terminals.
+fn preview_name(candidate: &str) -> String {
+    let is_dir = candidate.ends_with('/');
+    let trimmed = candidate.trim_end_matches('/');
+    let mut name = trimmed.rsplit('/').next().unwrap_or(trimmed);
+    if name.is_empty() {
+        name = trimmed;
+    }
+    if is_dir {
+        format!("{name}/")
+    } else {
+        name.to_string()
+    }
+}
+
 fn completion_preview(candidates: &[String]) -> String {
     let mut preview = candidates
         .iter()
         .take(5)
-        .cloned()
+        .map(|candidate| preview_name(candidate))
         .collect::<Vec<_>>()
         .join(" ");
     if candidates.len() > 5 {
@@ -3173,6 +3190,19 @@ mod tests {
 
     fn editor_in(dir: &Path, text: &str) -> Editor {
         Editor::from_text(text, Some(dir.join("buffer.txt")), Config::default())
+    }
+
+    #[test]
+    fn completion_preview_shows_path_basenames() {
+        let candidates = vec![
+            "/very/long/directory/alpha.txt".to_string(),
+            "/very/long/directory/subdir/".to_string(),
+            "save-buffer".to_string(),
+        ];
+        assert_eq!(
+            completion_preview(&candidates),
+            "alpha.txt subdir/ save-buffer"
+        );
     }
 
     #[test]

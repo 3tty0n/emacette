@@ -174,11 +174,14 @@ def test_find_file_tab_completion():
 
 
 def test_minibuffer_menus_open_immediately():
-    directory = tempfile.mkdtemp(prefix="emacette-e2e-")
+    # Keep this path short: the initial find-file prompt contains the whole
+    # directory, and on macOS /var/folders paths can push the candidate hint
+    # off an 80-column line.
+    directory = tempfile.mkdtemp(prefix="e-", dir="/tmp")
     path = os.path.join(directory, "note.txt")
     with open(path, "w", encoding="utf-8") as handle:
         handle.write("note\n")
-    with open(os.path.join(directory, "zzz-immediate-candidate.txt"), "w", encoding="utf-8") as handle:
+    with open(os.path.join(directory, "zzz.txt"), "w", encoding="utf-8") as handle:
         handle.write("candidate\n")
     previous = os.getcwd()
     os.chdir(directory)
@@ -197,8 +200,8 @@ def test_minibuffer_menus_open_immediately():
         "M-x and find-file list candidates immediately",
         code == 0
         and b"save-buffers-kill-terminal" in out
-        and b"zzz-immediate-candidate.txt" in out,
-        f"mx={b'save-buffers-kill-terminal' in out} file={b'zzz-immediate-candidate.txt' in out}",
+        and b"zzz.txt" in out,
+        f"mx={b'save-buffers-kill-terminal' in out} file={b'zzz.txt' in out}",
     )
 
 
