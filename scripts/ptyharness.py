@@ -37,6 +37,30 @@ def read_available(fd, timeout=0.05):
         return b""
 
 
+def drain_quiet(fd, out, first_output, start, quiet=0.03, max_wait=0.3):
+    """Read until the program has been quiet for a short moment.
+
+    The editor coalesces buffered keys and paints once, so a fixed
+    ``time.sleep`` between keys is not enough on a slow runner: a prompt can
+    be set up and replaced before it is ever rendered.  Draining after each
+    key gives the next frame a chance to appear and keeps the captured output
+    deterministic.
+    """
+    deadline = time.monotonic() + max_wait
+    quiet_since = time.monotonic()
+    while time.monotonic() < deadline:
+        chunk = read_available(fd, 0.01)
+        now = time.monotonic()
+        if chunk:
+            out += chunk
+            if first_output is None:
+                first_output = now - start
+            quiet_since = now
+        elif now - quiet_since >= quiet:
+            break
+    return first_output
+
+
 def run(
     argv,
     keys,
@@ -91,6 +115,11 @@ def run(
         except OSError:
             break
         time.sleep(key_delay)
+        first_output = drain_quiet(fd, out, first_output, start)
+
+    # The per-key drains can take a few hundred milliseconds in total.  Keep
+    # at least a short window for the program to finish after the last key.
+    deadline = max(deadline, time.monotonic() + 2.0)
 
     status = None
     while time.monotonic() < deadline:

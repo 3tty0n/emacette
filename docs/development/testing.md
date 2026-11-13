@@ -72,8 +72,11 @@ Guidelines for new e2e tests:
   be installed.
 
 The harness waits for the first frame (or an explicit `expect` string), sends
-keys with a small delay, and enforces a timeout. If a test is flaky, fix the
-synchronization rather than adding a long sleep.
+keys with a small delay, drains the output after each key so intermediate
+prompts are captured, and enforces a timeout. This matters on slower macOS
+runners, where several keys can otherwise be coalesced before the editor
+paints. If a test is flaky, fix the synchronization rather than adding a long
+sleep.
 
 ## Benchmarks
 
