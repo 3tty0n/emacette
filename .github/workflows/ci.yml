@@ -15,14 +15,27 @@ jobs:
           components: rustfmt, clippy
       - name: Format
         run: cargo fmt -- --check
+      - name: Guard against PATH-dependent strip
+        run: |
+          set -eu
+          if grep -Eq '^[[:space:]]*strip[[:space:]]*=[[:space:]]*true' Cargo.toml; then
+            echo "::error::Do not set strip=true in Cargo.toml; rustc uses strip from PATH on macOS and a bad one produces a SIGKILLed binary."
+            exit 1
+          fi
       - name: Clippy
         run: cargo clippy --all-targets -- -D warnings
       - name: Unit and integration tests
         run: cargo test
       - name: Release build
         run: cargo build --release
-      - name: Installer syntax
-        run: sh -n install.sh
+      - name: Script syntax
+        run: sh -n install.sh && sh -n scripts/release.sh
+      - name: Release script
+        run: |
+          set -eu
+          ./scripts/release.sh --output "$RUNNER_TEMP/dist"
+          ls -l "$RUNNER_TEMP/dist"
+          tar -tzf "$RUNNER_TEMP"/dist/emacette-*.tar.gz
       - name: Installer test
         run: |
           set -eu
@@ -53,3 +66,48 @@ jobs:
           rm -rf "$tmp"
       - name: PTY end-to-end tests
         run: python3 scripts/e2e.py
+
+  macos:
+    name: macOS ${{ matrix.arch }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            os: macos-15
+            target: aarch64-apple-darwin
+            rust_targets: aarch64-apple-darwin,x86_64-apple-darwin
+          - arch: intel
+            os: macos-15-intel
+            target: x86_64-apple-darwin
+            rust_targets: x86_64-apple-darwin
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+          targets: ${{ matrix.rust_targets }}
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Unit and integration tests
+        run: cargo test
+      - name: Release build
+        run: cargo build --release
+      - name: Verify the native binary
+        run: |
+          set -eu
+          ./target/release/emacette --version
+          if [ "$(uname -m)" = arm64 ]; then
+            # rustc ad-hoc signs arm64 Mach-O files; this catches a broken
+            # signature (macOS kills such a binary with SIGKILL).
+            codesign --verify --strict target/release/emacette
+          fi
+      - name: Package the native binary
+        run: ./scripts/release.sh --target "${{ matrix.target }}" --output "$RUNNER_TEMP/dist"
+      - name: Package the universal binary
+        if: matrix.arch == 'arm64'
+        run: ./scripts/release.sh --target universal-apple-darwin --output "$RUNNER_TEMP/dist-universal"
+      - name: PTY end-to-end tests
+        run: python3 scripts/e2e.py target/release/emacette

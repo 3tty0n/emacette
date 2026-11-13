@@ -157,7 +157,7 @@ fn is_current_process(pane_command: &str) -> bool {
             names.push(name.to_string_lossy().into_owned());
         }
     }
-    if let Some(arg0) = env::args().next() {
+    if let Some(arg0) = env::args_os().next() {
         if let Some(name) = std::path::Path::new(&arg0).file_name() {
             names.push(name.to_string_lossy().into_owned());
         }

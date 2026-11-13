@@ -6,7 +6,8 @@ Part of the [emacette user guide](README.md).
 
 - Rust 1.74 or newer for source installs.
 - Linux (static musl or glibc) or macOS (universal or per-architecture) for
-  prebuilt binaries.
+  prebuilt binaries. The release workflow publishes an arm64, an Intel, and a
+  universal macOS archive; the universal one is preferred by the installer.
 
 ## From source
 
@@ -45,12 +46,44 @@ From a checkout, or to pin a release:
 
 - The installer supports Linux assets for static musl or glibc.
 - The installer supports macOS universal or per-architecture assets.
+- On Apple silicon, the installer detects the hardware even when the shell
+  runs under Rosetta, so it installs the universal or arm64 archive instead of
+  the Intel one.
+- On macOS the installer removes the quarantine attribute, repairs a missing
+  ad-hoc signature when possible, and runs the new binary once before
+  replacing an existing installation. A binary that macOS would kill on
+  launch therefore does not replace a working copy.
 - Set `EMACETTE_REPO=owner/repo` when the repository slug differs.
 - `NEMACS_REPO` and `NEMACS_BASE_URL` are accepted as legacy aliases.
 - Re-run the installer, or run `cargo install --force`, to update.
 - `--uninstall` never removes `~/.config/emacette`.
 
 The URLs above assume the repository is `3tty0n/emacette`.
+
+## macOS troubleshooting
+
+If macOS terminates emacette immediately (`Killed: 9`, or git reports that
+the editor failed to start), the binary was rejected before it could run.
+Reinstall with the current script; it clears quarantine and verifies that the
+installed file starts. To inspect an existing binary:
+
+```sh
+file "$HOME/.local/bin/emacette"
+codesign --verify --strict "$HOME/.local/bin/emacette"
+xattr -l "$HOME/.local/bin/emacette"
+```
+
+For a source build, also check that `strip` resolves to the Apple tool:
+
+```sh
+command -v strip     # should print /usr/bin/strip
+```
+
+emacette's release profile does not ask cargo to strip during ordinary
+`cargo build --release`; `scripts/release.sh` strips Apple binaries explicitly
+with `/usr/bin/strip` and signs them afterwards. A GNU/Homebrew/MacPorts/Nix
+`strip` earlier in `PATH` can corrupt a Mach-O file and produce exactly this
+crash.
 
 ## Migrating from nano-emacs
 

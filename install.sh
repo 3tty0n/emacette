@@ -41,6 +41,12 @@ Supported assets:
   Linux x86_64/aarch64: static musl or glibc
   macOS x86_64/arm64: universal or per-architecture
 
+On macOS, the installer removes the quarantine attribute, repairs a missing
+ad-hoc signature when possible, and runs the downloaded binary once before
+replacing an existing installation.  It also detects Apple silicon when this
+shell runs under Rosetta, so a universal or arm64 build is selected instead of
+the Intel one.
+
 Updating is the same as installing: run this script again.
 Configuration in ~/.config/emacette is kept by --uninstall.
 EOF
@@ -80,6 +86,7 @@ while [ $# -gt 0 ]; do
     shift
 done
 
+os=$(uname -s)
 [ -n "$prefix" ] || die "empty install prefix"
 bindir=${BINDIR:-"$prefix/bin"}
 
@@ -97,6 +104,24 @@ if [ "$uninstall" = 1 ]; then
     exit 0
 fi
 
+prepare_macos_binary() {
+    path=$1
+    [ "$os" = Darwin ] || return 0
+    # A browser (or a quarantine-preserving copy) can attach this attribute.
+    # Gatekeeper then kills the binary before main() runs.
+    if command -v xattr >/dev/null 2>&1; then
+        xattr -d com.apple.quarantine "$path" 2>/dev/null || true
+    fi
+    # An ad-hoc signature is enough for a local CLI.  Repair one that a
+    # packaging step invalidated; a malformed Mach-O still fails the run
+    # check below.
+    if command -v codesign >/dev/null 2>&1; then
+        if ! codesign --verify --strict "$path" >/dev/null 2>&1; then
+            codesign --force --sign - "$path" >/dev/null 2>&1 || true
+        fi
+    fi
+}
+
 install_binary() {
     src=$1
     dest="$bindir/emacette"
@@ -106,13 +131,26 @@ install_binary() {
         rm -f "$tmp"
         die "cannot make $tmp executable"
     }
+    prepare_macos_binary "$tmp"
+    # Run the new binary before replacing the old one.  On macOS this catches
+    # a binary that Gatekeeper, the architecture, or a bad strip step has
+    # made unrunnable; the previous installation is kept intact.
+    if ! installed=$("$tmp" --version 2>/dev/null); then
+        if [ "$os" = Darwin ]; then
+            printf 'install.sh: macOS refused the new binary:\n' >&2
+            file "$tmp" >&2 || true
+            codesign --verify --strict "$tmp" >&2 || true
+            xattr -l "$tmp" >&2 || true
+        fi
+        rm -f "$tmp"
+        die "the new emacette binary failed to run; the previous installation was kept"
+    fi
     mv -f "$tmp" "$dest" || {
         rm -f "$tmp"
         die "cannot replace $dest"
     }
     printf 'Installed %s\n' "$dest"
-    installed=$("$dest" --version 2>/dev/null || true)
-    [ -n "$installed" ] && printf '%s\n' "$installed"
+    printf '%s\n' "$installed"
 }
 
 if [ "$from_source" = 1 ]; then
@@ -120,6 +158,13 @@ if [ "$from_source" = 1 ]; then
     need cargo
     script_dir=$(CDPATH= cd "$(dirname "$0")" && pwd)
     [ -f "$script_dir/Cargo.toml" ] || die "--from-source needs a source checkout"
+    # On macOS, prefer the system toolchain over Homebrew/MacPorts/Nix
+    # binutils.  rustc invokes `strip` from PATH when a profile asks for it,
+    # and a GNU strip can produce a Mach-O file that macOS kills on launch.
+    if [ "$os" = Darwin ]; then
+        PATH="/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
+        export PATH
+    fi
     (cd "$script_dir" && cargo build --release --locked) || die "cargo build failed"
     mkdir -p "$bindir" || die "cannot create $bindir"
     install_binary "$script_dir/target/release/emacette"
@@ -131,8 +176,14 @@ need tar
 need uname
 need awk
 
-os=$(uname -s)
 arch=$(uname -m)
+# On Apple silicon, a shell running under Rosetta reports x86_64.  Prefer the
+# native arm64 build in that case instead of the Intel one.
+if [ "$os" = Darwin ] && [ "$arch" = x86_64 ] &&
+    command -v sysctl >/dev/null 2>&1 &&
+    [ "$(sysctl -n hw.optional.arm64 2>/dev/null || echo 0)" = 1 ]; then
+    arch=arm64
+fi
 case "$os:$arch" in
     Linux:x86_64 | Linux:amd64)
         candidates="x86_64-unknown-linux-musl x86_64-unknown-linux-gnu"

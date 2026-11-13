@@ -25,8 +25,11 @@ python3 scripts/e2e.py target/release/emacette   # run against an existing build
 ```
 
 `make check` runs `cargo fmt -- --check` and `cargo test`; CI additionally runs
-`cargo clippy --all-targets -- -D warnings`, a release build, installer checks,
-and the PTY suite.
+`cargo clippy --all-targets -- -D warnings`, a release build, `release.sh`,
+installer checks, and the PTY suite. The macOS jobs run the same tests and PTY
+suite natively on arm64 and Intel; the arm64 job also builds and verifies the
+universal package (including `codesign`, `lipo`, and an actual launch) before
+a release can pass.
 
 ## Unit tests
 

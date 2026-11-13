@@ -109,7 +109,11 @@ The GitHub Actions workflow runs, in order:
 2. `cargo clippy --all-targets -- -D warnings`
 3. `cargo test`
 4. `cargo build --release`
-5. `sh -n install.sh`, an installer smoke test, and the PTY end-to-end suite
+5. shell syntax checks, an installer smoke test, `scripts/release.sh`, and the
+   PTY end-to-end suite
+6. native macOS arm64 and Intel jobs (clippy, tests, release build, signature
+   and `lipo` checks, and the PTY suite); the arm64 job also verifies the
+   universal package
 
 Run the same gates locally with `cargo fmt -- --check`,
 `cargo clippy --all-targets -- -D warnings`, `cargo test`, and `make e2e`.

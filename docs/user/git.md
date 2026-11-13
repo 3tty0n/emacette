@@ -29,3 +29,8 @@ GIT_EDITOR=emacette git commit                                   # one-off
   [Configuration](configuration.md).
 - The prefix can also be set per language, for example
   `[gitcommit] comment_start = ";"`.
+- On macOS, if git reports that the editor failed to start or the process is
+  killed (`Killed: 9`), reinstall with the current script. It prefers the
+  universal binary, removes Gatekeeper quarantine, and verifies that the
+  installed file starts. See
+  [Installation](install.md#macos-troubleshooting).

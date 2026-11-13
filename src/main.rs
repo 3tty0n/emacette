@@ -1,4 +1,5 @@
 use std::env;
+use std::ffi::OsString;
 use std::io::{self, IsTerminal, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -28,46 +29,78 @@ fn main() -> ExitCode {
     }
 }
 
-fn run() -> Result<i32, String> {
+#[derive(Debug)]
+enum ParsedArgs {
+    Help,
+    Version,
+    Run {
+        file: Option<PathBuf>,
+        line: Option<usize>,
+    },
+}
+
+/// Parse arguments without assuming they are UTF-8.
+///
+/// `std::env::args()` panics on a non-UTF-8 argument.  Paths on Unix are
+/// arbitrary bytes, and git can pass such a path to the editor, so use
+/// `args_os()` and only interpret options and `+LINE` when the argument is
+/// valid Unicode.
+fn parse_args<I>(args: I) -> Result<ParsedArgs, String>
+where
+    I: IntoIterator<Item = OsString>,
+{
     let mut file: Option<PathBuf> = None;
     let mut line: Option<usize> = None;
     let mut after_double_dash = false;
 
-    for arg in env::args().skip(1) {
+    for arg in args {
         if !after_double_dash {
-            match arg.as_str() {
-                "-h" | "--help" => {
-                    print_help();
-                    return Ok(0);
-                }
-                "-V" | "--version" => {
-                    println!("emacette {}", env!("CARGO_PKG_VERSION"));
-                    return Ok(0);
-                }
-                "--" => {
+            match arg.to_str() {
+                Some("-h" | "--help") => return Ok(ParsedArgs::Help),
+                Some("-V" | "--version") => return Ok(ParsedArgs::Version),
+                Some("--") => {
                     after_double_dash = true;
                     continue;
                 }
-                "-" => {
-                    // Treat a lone dash as a (strange) file name.
-                }
                 _ => {}
             }
-            if let Some(number) = arg.strip_prefix('+') {
-                if let Ok(number) = number.parse::<usize>() {
-                    line = Some(number.max(1));
-                    continue;
+            if let Some(text) = arg.to_str() {
+                if let Some(number) = text.strip_prefix('+') {
+                    if let Ok(number) = number.parse::<usize>() {
+                        line = Some(number.max(1));
+                        continue;
+                    }
                 }
-            }
-            if arg.starts_with('-') && arg != "-" {
-                return Err(format!("unknown option '{arg}' (try --help)"));
+                // A lone dash is treated as a (strange) file name.
+                if text.starts_with('-') && text != "-" {
+                    return Err(format!("unknown option '{text}' (try --help)"));
+                }
             }
         }
         if file.is_some() {
-            return Err(format!("unexpected extra argument '{arg}'"));
+            return Err(format!(
+                "unexpected extra argument '{}'",
+                arg.to_string_lossy()
+            ));
         }
         file = Some(PathBuf::from(arg));
     }
+
+    Ok(ParsedArgs::Run { file, line })
+}
+
+fn run() -> Result<i32, String> {
+    let (file, line) = match parse_args(env::args_os().skip(1))? {
+        ParsedArgs::Help => {
+            print_help();
+            return Ok(0);
+        }
+        ParsedArgs::Version => {
+            println!("emacette {}", env!("CARGO_PKG_VERSION"));
+            return Ok(0);
+        }
+        ParsedArgs::Run { file, line } => (file, line),
+    };
 
     if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
         return Err("standard input/output is not a terminal".to_string());
@@ -262,4 +295,68 @@ fn convert_key(event: KeyEvent) -> Option<Key> {
         alt,
         shift,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(args: &[&str]) -> Result<ParsedArgs, String> {
+        parse_args(args.iter().map(|arg| OsString::from(*arg)))
+    }
+
+    fn run_args(args: &[&str]) -> (Option<PathBuf>, Option<usize>) {
+        match parse(args).expect("arguments should parse") {
+            ParsedArgs::Run { file, line } => (file, line),
+            other => panic!("expected run arguments, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_files_options_and_line_numbers() {
+        assert_eq!(
+            run_args(&["+42", "note.txt"]),
+            (Some(PathBuf::from("note.txt")), Some(42))
+        );
+        assert_eq!(run_args(&["-", "+0"]), (Some(PathBuf::from("-")), Some(1)));
+        assert_eq!(run_args(&["--", "-h"]), (Some(PathBuf::from("-h")), None));
+        assert!(matches!(parse(&["--help"]), Ok(ParsedArgs::Help)));
+        assert!(matches!(parse(&["-V"]), Ok(ParsedArgs::Version)));
+    }
+
+    #[test]
+    fn rejects_unknown_options_and_extra_arguments() {
+        assert!(parse(&["--wat"]).unwrap_err().contains("unknown option"));
+        assert!(parse(&["a.txt", "b.txt"])
+            .unwrap_err()
+            .contains("unexpected extra argument"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn accepts_non_utf8_file_names() {
+        use std::os::unix::ffi::{OsStrExt, OsStringExt};
+
+        let arg = OsString::from_vec(b"bad-\xff.txt".to_vec());
+        match parse_args(vec![arg]).expect("non-UTF-8 paths are valid arguments") {
+            ParsedArgs::Run { file, .. } => {
+                assert_eq!(file.expect("file").as_os_str().as_bytes(), b"bad-\xff.txt");
+            }
+            other => panic!("expected run arguments, got {other:?}"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn non_utf8_extra_argument_is_reported_without_panicking() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let args = vec![
+            OsString::from("first.txt"),
+            OsString::from_vec(b"second-\xff.txt".to_vec()),
+        ];
+        let error = parse_args(args).unwrap_err();
+        assert!(error.contains("unexpected extra argument"));
+        assert!(error.contains('\u{fffd}'));
+    }
 }

@@ -50,29 +50,40 @@ jobs:
           - target: x86_64-unknown-linux-musl
             os: ubuntu-latest
             cross: true
+            rust_targets: x86_64-unknown-linux-musl
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
             cross: false
+            rust_targets: x86_64-unknown-linux-gnu
           - target: aarch64-unknown-linux-musl
             os: ubuntu-latest
             cross: true
+            rust_targets: aarch64-unknown-linux-musl
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
             cross: true
-          # Both macOS architectures are built on the arm64 runner. Rust can
-          # cross-compile between Apple architectures with the installed SDK.
+            rust_targets: aarch64-unknown-linux-gnu
+          # Build each macOS architecture on a matching runner so the package
+          # is smoke-tested natively.  The universal archive joins both
+          # slices on the arm64 runner.
           - target: x86_64-apple-darwin
-            os: macos-15
+            os: macos-15-intel
             cross: false
+            rust_targets: x86_64-apple-darwin
           - target: aarch64-apple-darwin
             os: macos-15
             cross: false
+            rust_targets: aarch64-apple-darwin
+          - target: universal-apple-darwin
+            os: macos-15
+            cross: false
+            rust_targets: aarch64-apple-darwin,x86_64-apple-darwin
     steps:
       - uses: actions/checkout@v4
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
+          targets: ${{ matrix.rust_targets }}
       - name: Install cross
         if: matrix.cross
         uses: taiki-e/install-action@v2
@@ -81,6 +92,34 @@ jobs:
           fallback: none
       - name: Build and package
         run: ./scripts/release.sh --target "${{ matrix.target }}" --output dist
+      - name: Verify macOS package
+        if: runner.os == 'macOS'
+        run: |
+          set -eu
+          version=$(awk -F'"' '/^version = / {print $2; exit}' Cargo.toml)
+          archive="dist/emacette-v${version}-${{ matrix.target }}.tar.gz"
+          test -f "$archive"
+          tmp=$(mktemp -d)
+          tar -xzf "$archive" -C "$tmp"
+          chmod 755 "$tmp/emacette"
+          codesign --verify --strict "$tmp/emacette"
+          lipo -archs "$tmp/emacette"
+          "$tmp/emacette" --version
+          rm -rf "$tmp"
+      - name: macOS installer smoke test
+        if: runner.os == 'macOS'
+        run: |
+          set -eu
+          tag="v$(awk -F'"' '/^version = / {print $2; exit}' Cargo.toml)"
+          tmp=$(mktemp -d)
+          prefix=$(mktemp -d)
+          mkdir -p "$tmp/releases/$tag"
+          cp dist/* "$tmp/releases/$tag/"
+          EMACETTE_BASE_URL="file://$tmp/releases" \
+            ./install.sh --release "$tag" --prefix "$prefix"
+          "$prefix/bin/emacette" --version
+          ./install.sh --uninstall --prefix "$prefix"
+          rm -rf "$tmp" "$prefix"
       - name: Upload package
         uses: actions/upload-artifact@v4
         with:
@@ -107,8 +146,8 @@ jobs:
           tag="$GITHUB_REF_NAME"
           version="${tag#v}"
           cd dist
-          # Keep in sync with the target matrix above.
-          expected=6
+          # Keep in sync with the target matrix above (4 Linux + 3 macOS).
+          expected=7
           found=$(find . -maxdepth 1 -name 'emacette-*.tar.gz' | wc -l)
           if [ "$found" -ne "$expected" ]; then
             echo "::error::expected $expected archives, found $found"

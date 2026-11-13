@@ -23,7 +23,9 @@ curl -fsSL https://raw.githubusercontent.com/3tty0n/emacette/main/install.sh | s
 ```
 
 The installer detects your platform, verifies the checksum, and installs to
-`~/.local/bin/emacette` by default.
+`~/.local/bin/emacette` by default. macOS releases include a universal binary;
+the installer prefers it, clears Gatekeeper quarantine, and runs the new
+binary once before replacing an existing installation.
 
 ### From source
 

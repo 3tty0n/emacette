@@ -725,6 +725,34 @@ def test_plus_line_argument():
     check("+LINE positions the cursor", code == 0 and b"L2 C1" in out)
 
 
+def test_non_utf8_file_name():
+    # Unix paths are bytes.  env::args() would panic on this name; git can
+    # pass such a path to the editor.  APFS enforces UTF-8 names, so keep the
+    # regression test to Linux filesystems.
+    if not sys.platform.startswith("linux"):
+        print("SKIP  non-UTF-8 file names (not Linux)")
+        return
+    directory = tempfile.mkdtemp(prefix="emacette-e2e-")
+    path = os.path.join(os.fsencode(directory), b"non-utf8-\xff.txt")
+    with open(path, "wb") as handle:
+        handle.write(b"first\n")
+    code, out, _ = run(
+        [os.fsencode(BIN), path],
+        [b"typed\n", b"\x18\x13", b"\x18\x03"],
+        cols=COLS,
+        rows=ROWS,
+        expect=b"first",
+    )
+    with open(path, "rb") as handle:
+        content = handle.read()
+    check(
+        "non-UTF-8 file names do not panic",
+        code == 0 and content == b"typed\nfirst\n" and b"panicked" not in out,
+        f"exit={code} content={content!r}",
+    )
+    shutil.rmtree(directory, ignore_errors=True)
+
+
 def test_cli():
     version = subprocess.run([BIN, "--version"], capture_output=True, text=True)
     check(
@@ -785,6 +813,7 @@ def main():
     test_git_empty_message_warning()
     test_git_abort()
     test_plus_line_argument()
+    test_non_utf8_file_name()
     test_cli()
     test_not_a_tty()
     print()
