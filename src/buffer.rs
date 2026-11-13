@@ -782,8 +782,8 @@ impl Buffer {
         let mut removed = String::new();
         removed.extend(first[start.col..].iter().copied());
         removed.push('\n');
-        for r in start.row + 1..end.row {
-            removed.extend(self.lines[r].iter().copied());
+        for line in &self.lines[start.row + 1..end.row] {
+            removed.extend(line.iter().copied());
             removed.push('\n');
         }
         removed.extend(last[..end.col].iter().copied());
@@ -812,8 +812,8 @@ impl Buffer {
         } else {
             out.extend(self.lines[start.row][start.col..].iter().copied());
             out.push('\n');
-            for r in start.row + 1..end.row {
-                out.extend(self.lines[r].iter().copied());
+            for line in &self.lines[start.row + 1..end.row] {
+                out.extend(line.iter().copied());
                 out.push('\n');
             }
             out.extend(self.lines[end.row][..end.col].iter().copied());
