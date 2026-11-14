@@ -90,7 +90,7 @@ A few keys to get going:
 
 ### Language-aware, but lightweight
 
-- Syntax highlighting for 40 [languages and formats](docs/user/languages.md).
+- Syntax highlighting for 41 [languages and formats](docs/user/languages.md).
 - Editor completion from buffer words, with LSP completions when a server is
   configured; candidates appear in a popup at point and completion is
   automatic in programming-language files.
@@ -122,7 +122,8 @@ git config --global core.editor emacette
 - `C-x C-s`, then `C-x C-c` — save and exit.
 
 emacette also opens `MERGE_MSG`, `TAG_EDITMSG`, and `SQUASH_MSG` in commit
-mode. See [Git integration](docs/user/git.md) for details.
+mode, and highlights `git rebase -i` todo lists. See
+[Git integration](docs/user/git.md) for details.
 
 ## Configuration
 

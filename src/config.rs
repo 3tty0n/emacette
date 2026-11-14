@@ -197,7 +197,7 @@ impl Config {
             .and_then(|config| config.comment_start.clone())
             .or_else(|| self.comment_start.clone())
             .unwrap_or_else(|| match lang {
-                Lang::GitCommit => self.comment_char.to_string(),
+                Lang::GitCommit | Lang::GitRebase => self.comment_char.to_string(),
                 _ => lang.default_comment_start().to_string(),
             });
         Settings {
@@ -558,6 +558,7 @@ mod tests {
             Lang::Latex,
             Lang::Json,
             Lang::GitCommit,
+            Lang::GitRebase,
         ] {
             assert!(
                 !config.settings_for(lang).editor_completion,
@@ -602,6 +603,7 @@ mod tests {
         assert_eq!(config.settings_for(Lang::Python).comment_start, "#");
         assert_eq!(config.settings_for(Lang::Latex).comment_start, "%");
         assert_eq!(config.settings_for(Lang::GitCommit).comment_start, "#");
+        assert_eq!(config.settings_for(Lang::GitRebase).comment_start, "#");
     }
 
     #[test]

@@ -154,7 +154,8 @@ Language keys are the names used by the syntax highlighter, for example:
 - `python`, `javascript`, `typescript`, `ruby`, `php`, `lua`, `haskell`
 - `elixir`, `sql`, `shell`, `markdown`, `latex`, `rst`, `asciidoc`
 - `json`, `toml`, `yaml`, `ini`, `hcl`, `nix`, `cmake`, `dockerfile`
-- `makefile`, `protobuf`, `html`, `css`, `vue`, `svelte`, `diff`, `gitcommit`
+- `makefile`, `protobuf`, `html`, `css`, `vue`, `svelte`
+- `diff`, `gitcommit`, `gitrebase`
 
 Automatic completion applies to Rust, Go, C, C++, Java, Kotlin, Swift, Zig,
 Dart, Python, JavaScript, TypeScript, Ruby, PHP, Lua, Haskell, Elixir, Nix,

@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use emacette::config::Config;
 use emacette::editor::Editor;
 use emacette::key::{Key, KeyCode};
-use emacette::syntax::Lang;
+use emacette::syntax::{Lang, Tok};
 
 fn temp_dir() -> PathBuf {
     static COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -157,6 +157,25 @@ fn quitting_an_unnamed_modified_buffer_prompts_for_a_file() {
     press(&mut ed, &[ENTER]);
     assert!(ed.should_quit);
     assert_eq!(fs::read_to_string(&target).unwrap(), "body");
+}
+
+#[test]
+fn interactive_rebase_todo_opens_with_highlighting() {
+    let dir = temp_dir();
+    let rebase_dir = dir.join(".git").join("rebase-merge");
+    fs::create_dir_all(&rebase_dir).unwrap();
+    let path = rebase_dir.join("git-rebase-todo");
+    fs::write(&path, "pick 1a2b3c4 first\npick deadbee second\n").unwrap();
+    let mut ed = Editor::from_text(
+        &fs::read_to_string(&path).unwrap(),
+        Some(path),
+        Config::default(),
+    );
+    assert_eq!(ed.mode, Lang::GitRebase);
+    ed.sync_highlighter();
+    let tokens = ed.highlighter.tokens(0, &ed.buffer.lines).to_vec();
+    assert!(tokens.iter().any(|span| span.kind == Tok::Keyword));
+    assert!(tokens.iter().any(|span| span.kind == Tok::Constant));
 }
 
 #[test]

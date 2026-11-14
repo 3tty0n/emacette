@@ -24,7 +24,8 @@ GIT_EDITOR=emacette git commit                                   # one-off
 - The same editor serves `git commit --amend`, `git tag -a`, `git rebase -i`,
   and every other command that invokes `$EDITOR`.
 - Files such as `COMMIT_EDITMSG`, `MERGE_MSG`, `TAG_EDITMSG`, and `SQUASH_MSG`
-  open in Git commit mode.
+  open in Git commit mode. `git rebase -i` todo lists open in Git rebase mode,
+  with commands, hashes, labels, and comments highlighted.
 - Set `comment_char` to match `core.commentChar` when it is not `#`. See
   [Configuration](configuration.md).
 - The prefix can also be set per language, for example

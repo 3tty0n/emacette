@@ -2,7 +2,7 @@
 
 Part of the [emacette user guide](README.md).
 
-Syntax highlighting covers 40 languages and formats.
+Syntax highlighting covers 41 languages and formats.
 
 ## Systems
 
@@ -69,6 +69,7 @@ mode. When using an LSP server for Clojure, Scheme, or Racket, set
 
 - Diff
 - Git commit messages
+- Git interactive rebase todo lists (`git-rebase-todo`)
 
 ## Detection
 
@@ -79,6 +80,8 @@ mode. When using an LSP server for Clojure, Scheme, or Racket, set
   PHP, Lua, Elixir, Haskell, Dart, Nix, and common shells.
 - `COMMIT_EDITMSG`, `MERGE_MSG`, `TAG_EDITMSG`, and `SQUASH_MSG` open in
   Git commit mode.
+- `git-rebase-todo`, its `.backup` file, and `done` inside Git's
+  `rebase-merge` or `rebase-apply` directories open in Git rebase mode.
 - `.lisp`, `.lsp`, `.cl`, `.asd`, `.el`, `.scm`, `.ss`, `.rkt`, `.clj`,
   `.cljs`, `.cljc`, and `.edn` open in Lisp mode.
 - Lisp shebangs for `sbcl`, `clisp`, `scheme`, `racket`, `guile`, and
@@ -86,6 +89,8 @@ mode. When using an LSP server for Clojure, Scheme, or Racket, set
 
 ## Notes
 
+- Rebase todo lists highlight commands, commit hashes, labels, and comments;
+  `exec` lines are highlighted as shell commands.
 - Vue and Svelte use HTML-style tag and attribute highlighting.
 - Embedded JavaScript and CSS inside `<script>` and `<style>` are not parsed as
   separate languages.

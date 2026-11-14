@@ -50,6 +50,7 @@ pub enum Lang {
     Svelte,
     Diff,
     GitCommit,
+    GitRebase,
 }
 
 impl Lang {
@@ -96,6 +97,7 @@ impl Lang {
             Lang::Svelte => "Svelte",
             Lang::Diff => "Diff",
             Lang::GitCommit => "GitCommit",
+            Lang::GitRebase => "GitRebase",
         }
     }
 
@@ -143,6 +145,7 @@ impl Lang {
             Lang::Svelte => "svelte",
             Lang::Diff => "diff",
             Lang::GitCommit => "gitcommit",
+            Lang::GitRebase => "gitrebase",
         }
     }
 
@@ -159,6 +162,7 @@ impl Lang {
             Lang::AsciiDoc => &["asciidoc", "adoc"],
             Lang::Shell => &["shell", "sh"],
             Lang::GitCommit => &["gitcommit", "git"],
+            Lang::GitRebase => &["gitrebase", "rebase"],
             Lang::Hcl => &["hcl", "terraform"],
             Lang::Lisp => &["lisp", "elisp", "scheme", "clojure", "racket"],
             Lang::Protobuf => &["protobuf", "proto"],
@@ -207,14 +211,14 @@ impl Lang {
             Lang::Latex => "%",
             Lang::Rst => "..",
             Lang::Ini => ";",
-            Lang::GitCommit => "#",
+            Lang::GitCommit | Lang::GitRebase => "#",
         }
     }
 
     /// Default LSP `languageId` for servers that expect one.
     pub fn lsp_language_id(self) -> &'static str {
         match self {
-            Lang::Plain | Lang::GitCommit => "plaintext",
+            Lang::Plain | Lang::GitCommit | Lang::GitRebase => "plaintext",
             Lang::Rust => "rust",
             Lang::Go => "go",
             Lang::C => "c",
@@ -312,6 +316,7 @@ impl Lang {
                 "commit_editmsg" | "merge_msg" | "tag_editmsg" | "squash_msg" => {
                     return Lang::GitCommit
                 }
+                "git-rebase-todo" | "git-rebase-todo.backup" => return Lang::GitRebase,
                 "makefile" | "gnumakefile" | "bsdmakefile" => return Lang::Makefile,
                 "cmakelists.txt" => return Lang::Cmake,
                 "dockerfile" | "containerfile" => return Lang::Dockerfile,
@@ -324,6 +329,9 @@ impl Lang {
             }
             if name == ".env" || name.starts_with(".env.") {
                 return Lang::Ini;
+            }
+            if name == "done" && is_git_rebase_dir(path) {
+                return Lang::GitRebase;
             }
             if name.ends_with(".mk") {
                 return Lang::Makefile;
@@ -524,7 +532,19 @@ pub fn lex(lang: Lang, chars: &[char], state: LexState) -> (Vec<Span>, LexState)
         Lang::Css => lex_css(chars, state),
         Lang::Diff => (lex_diff(chars), state),
         Lang::GitCommit => lex_gitcommit(chars, state),
+        Lang::GitRebase => lex_git_rebase(chars, state),
     }
+}
+
+/// Whether `path` lives in a directory Git uses for an in-progress rebase.
+fn is_git_rebase_dir(path: &Path) -> bool {
+    path.parent()
+        .and_then(|parent| parent.file_name())
+        .map(|name| {
+            let name = name.to_string_lossy();
+            name.eq_ignore_ascii_case("rebase-merge") || name.eq_ignore_ascii_case("rebase-apply")
+        })
+        .unwrap_or(false)
 }
 
 // ---------------------------------------------------------------------------
@@ -3248,7 +3268,7 @@ fn lex_markdown(chars: &[char], mut state: LexState) -> (Vec<Span>, LexState) {
 }
 
 // ---------------------------------------------------------------------------
-// Git commit messages and diffs
+// Git commit messages, interactive rebase todo lists, and diffs
 
 fn lex_gitcommit(chars: &[char], mut state: LexState) -> (Vec<Span>, LexState) {
     let n = chars.len();
@@ -3282,6 +3302,129 @@ fn lex_gitcommit(chars: &[char], mut state: LexState) -> (Vec<Span>, LexState) {
         }
     }
     state.seen_text = true;
+    (spans, state)
+}
+
+const GIT_REBASE_COMMANDS: &[&str] = &[
+    "pick",
+    "p",
+    "reword",
+    "r",
+    "edit",
+    "e",
+    "squash",
+    "s",
+    "fixup",
+    "f",
+    "drop",
+    "d",
+    "exec",
+    "x",
+    "break",
+    "b",
+    "label",
+    "l",
+    "reset",
+    "t",
+    "merge",
+    "m",
+    "update-ref",
+    "u",
+    "noop",
+];
+
+fn skip_spaces(chars: &[char], mut i: usize) -> usize {
+    while i < chars.len() && chars[i].is_whitespace() {
+        i += 1;
+    }
+    i
+}
+
+fn token_end(chars: &[char], mut i: usize) -> usize {
+    while i < chars.len() && !chars[i].is_whitespace() {
+        i += 1;
+    }
+    i
+}
+
+fn lex_git_rebase(chars: &[char], state: LexState) -> (Vec<Span>, LexState) {
+    let n = chars.len();
+    let mut spans = Vec::new();
+    let mut i = skip_spaces(chars, 0);
+    if i == n {
+        return (spans, state);
+    }
+    if chars[i] == '#' {
+        spans.push(Span::new(i, n, Tok::Comment));
+        return (spans, state);
+    }
+
+    let command_start = i;
+    i = token_end(chars, i);
+    let command = text_of(chars, command_start, i);
+    if !GIT_REBASE_COMMANDS.contains(&command.as_str()) {
+        return (spans, state);
+    }
+    spans.push(Span::new(command_start, i, Tok::Keyword));
+
+    // `exec` runs the rest of the line as a shell command.
+    if command == "exec" || command == "x" {
+        let start = skip_spaces(chars, i);
+        if start < n {
+            let (mut nested, _) = lex_code(&chars[start..], LexState::default(), &SHELL);
+            for span in &mut nested {
+                span.start += start;
+                span.end += start;
+            }
+            spans.extend(nested);
+        }
+        return (spans, state);
+    }
+
+    if matches!(command.as_str(), "break" | "b" | "noop") {
+        return (spans, state);
+    }
+
+    let mut next = skip_spaces(chars, i);
+    let mut target_done = false;
+
+    // `fixup -C <commit>` and `merge -C <commit>` take an option before the
+    // target.  A merge still names a label after the commit.
+    if matches!(command.as_str(), "fixup" | "f" | "merge" | "m") {
+        let end = token_end(chars, next);
+        let option = text_of(chars, next, end);
+        if option == "-C" || option == "-c" {
+            spans.push(Span::new(next, end, Tok::Keyword));
+            next = skip_spaces(chars, end);
+            if next < n {
+                let end = token_end(chars, next);
+                spans.push(Span::new(next, end, Tok::Constant));
+                next = skip_spaces(chars, end);
+                target_done = matches!(command.as_str(), "fixup" | "f");
+            }
+        }
+    }
+
+    if !target_done && next < n {
+        let end = token_end(chars, next);
+        let kind = match command.as_str() {
+            "label" | "l" | "reset" | "t" | "update-ref" | "u" | "merge" | "m" => Tok::Type,
+            _ => Tok::Constant,
+        };
+        spans.push(Span::new(next, end, kind));
+        next = skip_spaces(chars, end);
+    }
+
+    if matches!(command.as_str(), "drop" | "d") {
+        // Dropped commits are shown like killed lines in Magit.
+        if next < n {
+            spans.push(Span::new(next, n, Tok::Comment));
+        }
+    } else if next < n && chars[next] == '#' {
+        // Git 2.50+ separates the description with `# `; it is not a comment.
+        spans.push(Span::new(next, next + 1, Tok::Comment));
+    }
+
     (spans, state)
 }
 
@@ -4747,6 +4890,7 @@ mod tests {
             Lang::Protobuf,
             Lang::Vue,
             Lang::Svelte,
+            Lang::GitRebase,
         ];
         let alphabet = [
             'a', 'Z', '0', ' ', '"', '\'', '/', '*', '#', '-', '[', ']', '{', '}', '<', '>', '@',
@@ -4825,6 +4969,30 @@ mod tests {
         assert_eq!(
             Lang::detect(Some(Path::new("/tmp/.git/COMMIT_EDITMSG")), None),
             Lang::GitCommit
+        );
+        assert_eq!(
+            Lang::detect(
+                Some(Path::new("/tmp/repo/.git/rebase-merge/git-rebase-todo")),
+                None
+            ),
+            Lang::GitRebase
+        );
+        assert_eq!(
+            Lang::detect(
+                Some(Path::new(
+                    "/tmp/repo/.git/rebase-merge/git-rebase-todo.backup"
+                )),
+                None
+            ),
+            Lang::GitRebase
+        );
+        assert_eq!(
+            Lang::detect(Some(Path::new("/tmp/repo/.git/rebase-merge/done")), None),
+            Lang::GitRebase
+        );
+        assert_eq!(
+            Lang::detect(Some(Path::new("/tmp/done")), None),
+            Lang::Plain
         );
         assert_eq!(Lang::detect(Some(Path::new("a.rs")), None), Lang::Rust);
         assert_eq!(
@@ -4916,6 +5084,66 @@ mod tests {
         let chars: Vec<char> = "# Please enter the commit message".chars().collect();
         let (spans, _) = lex(Lang::GitCommit, &chars, state);
         assert_eq!(spans[0].kind, Tok::Comment);
+    }
+
+    #[test]
+    fn git_rebase_commands_and_hashes() {
+        let (spans, _) = kinds("pick 1a2b3c4 Add the widget", Lang::GitRebase);
+        assert!(has(&spans, "pick", Tok::Keyword));
+        assert!(has(&spans, "1a2b3c4", Tok::Constant));
+
+        let (spans, _) = kinds("p deadbee Fix a typo", Lang::GitRebase);
+        assert!(has(&spans, "p", Tok::Keyword));
+        assert!(has(&spans, "deadbee", Tok::Constant));
+
+        let (spans, _) = kinds("drop 1a2b3c4 Remove old thing", Lang::GitRebase);
+        assert!(has(&spans, "drop", Tok::Keyword));
+        assert!(has(&spans, "1a2b3c4", Tok::Constant));
+        assert!(has(&spans, "Remove old thing", Tok::Comment));
+    }
+
+    #[test]
+    fn git_rebase_labels_and_merge_options() {
+        let (spans, _) = kinds("label onto", Lang::GitRebase);
+        assert!(has(&spans, "label", Tok::Keyword));
+        assert!(has(&spans, "onto", Tok::Type));
+
+        let (spans, _) = kinds("merge -C 1a2b3c4 topic", Lang::GitRebase);
+        assert!(has(&spans, "merge", Tok::Keyword));
+        assert!(has(&spans, "-C", Tok::Keyword));
+        assert!(has(&spans, "1a2b3c4", Tok::Constant));
+        assert!(has(&spans, "topic", Tok::Type));
+
+        let (spans, _) = kinds("fixup -c deadbee Tweak it", Lang::GitRebase);
+        assert!(has(&spans, "fixup", Tok::Keyword));
+        assert!(has(&spans, "-c", Tok::Keyword));
+        assert!(has(&spans, "deadbee", Tok::Constant));
+        assert!(!has(&spans, "Tweak it", Tok::Constant));
+    }
+
+    #[test]
+    fn git_rebase_exec_and_comments() {
+        let (spans, _) = kinds("exec echo \"hello world\"", Lang::GitRebase);
+        assert!(has(&spans, "exec", Tok::Keyword));
+        assert!(has(&spans, "\"hello world\"", Tok::String));
+
+        let (spans, _) = kinds("x make test", Lang::GitRebase);
+        assert!(has(&spans, "x", Tok::Keyword));
+
+        let (spans, _) = kinds("  # Rebase deadbee onto 1a2b3c4", Lang::GitRebase);
+        assert_eq!(
+            spans,
+            vec![("# Rebase deadbee onto 1a2b3c4".to_string(), Tok::Comment)]
+        );
+
+        let (spans, _) = kinds("pick 1a2b3c4 # Keep the subject", Lang::GitRebase);
+        assert!(has(&spans, "#", Tok::Comment));
+        assert!(!has(&spans, "Keep the subject", Tok::Comment));
+
+        let (spans, _) = kinds("not a rebase command", Lang::GitRebase);
+        assert!(spans.is_empty());
+        let (spans, _) = kinds("", Lang::GitRebase);
+        assert!(spans.is_empty());
     }
 
     #[test]
