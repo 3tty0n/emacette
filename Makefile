@@ -4,7 +4,7 @@ CARGO ?= cargo
 PYTHON ?= python3
 BIN := target/release/emacette
 
-.PHONY: all build test check fmt e2e bench install uninstall clean release
+.PHONY: all build test check fmt e2e bench install uninstall clean release major minor patch
 
 all: build
 
@@ -29,6 +29,9 @@ bench: build
 
 release:
 	./scripts/release.sh $(ARGS)
+
+major minor patch:
+	$(PYTHON) scripts/bump_version.py $@
 
 install: build
 	mkdir -p $(DESTDIR)$(BINDIR)

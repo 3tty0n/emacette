@@ -12,8 +12,10 @@ manual fallback.
 - The tag must match the version in `Cargo.toml`; the workflow fails otherwise.
 - The project is pre-1.0: minor releases may contain user-visible changes, and
   patch releases should stay backward compatible within a minor series.
-- Update `Cargo.lock` after changing the version (a normal `cargo build` does
-  this) so `--locked` builds keep working.
+- Run `make major`, `make minor`, or `make patch` to increment that component
+  and reset lower components to zero. Both `Cargo.toml` and `Cargo.lock` are
+  updated; these targets do not commit, tag, or publish a release.
+- Test the version targets with `python3 scripts/test_bump_version.py`.
 
 ## Pre-release checklist
 
