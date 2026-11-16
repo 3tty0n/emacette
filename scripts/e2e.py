@@ -624,7 +624,7 @@ def test_help_overlay():
     )
 
 
-def test_git_commit():
+def test_git_commit(dev_tty=False):
     repo = tempfile.mkdtemp(prefix="emacette-git-")
     try:
         subprocess.run(["git", "-C", repo, "init", "-q"], check=True)
@@ -633,8 +633,11 @@ def test_git_commit():
         with open(os.path.join(repo, "hello.txt"), "w", encoding="utf-8") as handle:
             handle.write("hello\n")
         subprocess.run(["git", "-C", repo, "add", "hello.txt"], check=True)
+        command = ["git", "-C", repo, "-c", f"core.editor={BIN}", "commit"]
+        if dev_tty:
+            command = ["sh", "-c", 'exec "$@" </dev/tty', "sh", *command]
         code, out, _ = run(
-            ["git", "-C", repo, "-c", f"core.editor={BIN}", "commit"],
+            command,
             [b"e2e: commit message\n", b"\x03\x03"],
             cols=COLS,
             rows=ROWS,
@@ -813,6 +816,7 @@ def main():
     test_search_does_not_activate_region()
     test_help_overlay()
     test_git_commit()
+    test_git_commit(dev_tty=True)
     test_git_empty_message_warning()
     test_git_abort()
     test_plus_line_argument()
